@@ -1,0 +1,80 @@
+@inject IPosService PosService
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" AllowClose="false">
+        Voiding a sale will mark the invoice as voided, return all sold items to stock, reverse cash drawer movement for cash payments, and reverse customer credit when applicable.
+    </RadzenAlert>
+
+    <div class="receive-payment-summary">
+        <div><span>Sale</span><strong>@SaleNumber</strong></div>
+        <div><span>Total</span><strong>@TotalAmount.ToString("C2")</strong></div>
+    </div>
+
+    <RadzenFormField Text="Void reason" Variant="Variant.Outlined" Style="width:100%">
+        <RadzenTextArea @bind-Value="_reason" Rows="3" Placeholder="Example: Wrong items scanned, duplicate invoice, cancelled before customer left…" />
+    </RadzenFormField>
+
+    @if (_error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+        <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+        <RadzenButton Icon="block" Text="Void sale" ButtonStyle="ButtonStyle.Danger"
+                      IsBusy="@_saving" Disabled="@(_saving || string.IsNullOrWhiteSpace(_reason) || _reason.Trim().Length < 3)"
+                      Click="@SubmitAsync" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public Guid SaleId { get; set; }
+    [Parameter] public string SaleNumber { get; set; } = string.Empty;
+    [Parameter] public decimal TotalAmount { get; set; }
+
+    private string? _reason;
+    private string? _error;
+    private bool _saving;
+
+    private async Task SubmitAsync()
+    {
+        _saving = true;
+        _error = null;
+
+        var approval = await DialogService.OpenAsync<ManagerApprovalDialog>(
+            "Manager approval",
+            new Dictionary<string, object?>
+            {
+                [nameof(ManagerApprovalDialog.ApprovalType)] = ManagerApprovalType.VoidSale,
+                [nameof(ManagerApprovalDialog.Reference)] = SaleNumber,
+                [nameof(ManagerApprovalDialog.Amount)] = TotalAmount,
+                [nameof(ManagerApprovalDialog.DefaultReason)] = _reason,
+                [nameof(ManagerApprovalDialog.Message)] = "Voiding a completed sale requires manager approval."
+            },
+            new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = false });
+
+        if (approval is not ManagerApprovalResultDto approved)
+        {
+            _saving = false;
+            return;
+        }
+
+        var result = await PosService.VoidSaleAsync(new VoidSaleDto
+        {
+            SaleId = SaleId,
+            Reason = $"{_reason} | Approved by {approved.ApprovedByName}"
+        });
+
+        _saving = false;
+
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error ?? "Sale could not be voided.";
+        }
+    }
+}

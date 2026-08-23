@@ -1,0 +1,146 @@
+<div class="sidebar-nav">
+    <div class="nav-section-label">Operations</div>
+    <RadzenPanelMenu>
+        <RadzenPanelMenuItem Text="Dashboard" Icon="dashboard" Path="/dashboard" />
+        <AuthorizeView Policy="@Permissions.Sales.Operate">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Point of Sale" Icon="point_of_sale" Path="/pos" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Sales.View">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Sales &amp; Returns" Icon="receipt_long" Path="/sales" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Operations.ShiftsView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Shifts &amp; Cash" Icon="account_balance_wallet" Path="/shifts" />
+            </Authorized>
+        </AuthorizeView>
+    </RadzenPanelMenu>
+
+    <div class="nav-section-label">Catalog &amp; Stock</div>
+    <RadzenPanelMenu>
+        <AuthorizeView Policy="@Permissions.Catalog.ProductsView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Products" Icon="inventory_2" Path="/products" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Catalog.ProductsManage">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Catalog Setup" Icon="tune" Path="/catalog/setup" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Catalog.InventoryView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="@InventoryLabel" Icon="warehouse" Path="/inventory" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Catalog.PurchasesView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Purchases" Icon="local_shipping" Path="/purchases" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Catalog.ReorderView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Smart Reorder" Icon="tips_and_updates" Path="/reorder" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Catalog.TransfersView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Transfers" Icon="swap_horiz" Path="/transfers" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Catalog.LabelsView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Barcode &amp; Labels" Icon="qr_code_2" Path="/labels" />
+            </Authorized>
+        </AuthorizeView>
+    </RadzenPanelMenu>
+
+    <div class="nav-section-label">Relationships</div>
+    <RadzenPanelMenu>
+        <AuthorizeView Policy="@Permissions.Relationships.CustomersView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Customers" Icon="groups" Path="/customers" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Relationships.SuppliersView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Suppliers" Icon="handshake" Path="/suppliers" />
+            </Authorized>
+        </AuthorizeView>
+    </RadzenPanelMenu>
+
+    <div class="nav-section-label">Insights</div>
+    <RadzenPanelMenu>
+        <AuthorizeView Policy="@Permissions.Insights.ReportsView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Reports" Icon="assessment" Path="/reports" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Insights.AlertsView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Smart Alerts" Icon="notifications_active" Path="/alerts" />
+            </Authorized>
+        </AuthorizeView>
+        <AuthorizeView Policy="@Permissions.Insights.RiskView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Risk Center" Icon="security" Path="/risk" />
+            </Authorized>
+        </AuthorizeView>
+    </RadzenPanelMenu>
+
+    <div class="nav-section-label">Administration</div>
+    <RadzenPanelMenu>
+        <RadzenPanelMenuItem Text="Setup" Icon="settings" Expanded="false">
+            <AuthorizeView Policy="@Permissions.Setup.CompanyView">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Company" Icon="business" Path="/setup/company" />
+                </Authorized>
+            </AuthorizeView>
+            <AuthorizeView Policy="@Permissions.Setup.StoresView">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Stores" Icon="store" Path="/setup/stores" />
+                </Authorized>
+            </AuthorizeView>
+            <AuthorizeView Policy="@Permissions.Setup.RegistersView">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Registers" Icon="desktop_windows" Path="/setup/registers" />
+                </Authorized>
+            </AuthorizeView>
+            <AuthorizeView Policy="@Permissions.Setup.UsersView">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Users" Icon="manage_accounts" Path="/setup/users" />
+                </Authorized>
+            </AuthorizeView>
+            <AuthorizeView Policy="@Permissions.Setup.RolesView">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Roles &amp; Permissions" Icon="admin_panel_settings" Path="/setup/roles" />
+                </Authorized>
+            </AuthorizeView>
+            <AuthorizeView Policy="@Permissions.Setup.ShortcutsView">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="POS Shortcuts" Icon="keyboard" Path="/setup/shortcuts" />
+                </Authorized>
+            </AuthorizeView>
+            <AuthorizeView Policy="@Permissions.Setup.PrintingView">
+                <Authorized>
+                    <RadzenPanelMenuItem Text="Receipt &amp; Printing" Icon="print" Path="/setup/printing" />
+                </Authorized>
+            </AuthorizeView>
+        </RadzenPanelMenuItem>
+        <AuthorizeView Policy="@Permissions.Insights.AuditView">
+            <Authorized>
+                <RadzenPanelMenuItem Text="Audit Trail" Icon="history" Path="/audit" />
+            </Authorized>
+        </AuthorizeView>
+    </RadzenPanelMenu>
+</div>
+
+@code {
+    [Parameter] public int LowStockCount { get; set; }
+
+    private string InventoryLabel =>
+        LowStockCount > 0 ? $"Inventory ({LowStockCount} low)" : "Inventory";
+}

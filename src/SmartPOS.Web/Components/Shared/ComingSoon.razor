@@ -1,0 +1,33 @@
+<div class="page-header">
+    <div>
+        <div class="breadcrumb">
+            <RadzenIcon Icon="home" /> <span>Home</span>
+            <RadzenIcon Icon="chevron_right" /> <span>@Title</span>
+        </div>
+        <h1>@Title</h1>
+        @if (!string.IsNullOrEmpty(Subtitle))
+        {
+            <p class="page-subtitle">@Subtitle</p>
+        }
+    </div>
+    @if (!string.IsNullOrEmpty(Phase))
+    {
+        <RadzenBadge Text="@Phase" BadgeStyle="BadgeStyle.Info" IsPill="true" />
+    }
+</div>
+
+<div class="placeholder-page">
+    <div class="placeholder-card">
+        <div class="ph-ic"><RadzenIcon Icon="@Icon" /></div>
+        <h2>@Title</h2>
+        <p class="page-subtitle">@Description</p>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Module";
+    [Parameter] public string Icon { get; set; } = "widgets";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string Description { get; set; } = "This module is part of the SmartPOS build plan and will be implemented in an upcoming phase.";
+    [Parameter] public string? Phase { get; set; }
+}

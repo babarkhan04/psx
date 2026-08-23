@@ -1,0 +1,233 @@
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem" class="pos-pay-dialog">
+    <div>
+        <RadzenText TextStyle="TextStyle.H5" Style="margin:0">Split payment</RadzenText>
+        <small>Payment lines must equal the invoice total.</small>
+    </div>
+
+    <div class="pos-pay-row">
+        <span>Total due</span>
+        <strong>@Total.ToString("C2")</strong>
+    </div>
+
+    <div class="pos-pay-table-wrap">
+        <table class="pos-pay-table">
+            <thead>
+                <tr>
+                    <th style="width:150px">Method</th>
+                    <th style="width:150px">Amount</th>
+                    <th>Reference</th>
+                    <th style="width:56px"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var line in _lines)
+                {
+                    <tr @key="line.Id">
+                        <td>
+                            <RadzenDropDown @bind-Value="line.Method"
+                                            Data="@_methods"
+                                            Style="width:100%"
+                                            Change="@(_ => Recalculate())" />
+                        </td>
+                        <td>
+                            <input class="rz-inputtext rz-textbox pos-pay-amount"
+                                   type="number"
+                                   min="0"
+                                   step="0.01"
+                                   value="@line.Amount.ToString("0.00")"
+                                   @oninput="@(e => OnAmountInput(line, e.Value?.ToString()))" />
+                        </td>
+                        <td>
+                            <RadzenTextBox @bind-Value="line.Reference"
+                                           Placeholder="Optional"
+                                           Style="width:100%" />
+                        </td>
+                        <td>
+                            <RadzenButton Icon="delete"
+                                          ButtonStyle="ButtonStyle.Light"
+                                          Size="ButtonSize.Small"
+                                          Disabled="@(_lines.Count <= 1)"
+                                          Click="@(() => Remove(line))" />
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <RadzenButton Text="Add payment line" Icon="add" ButtonStyle="ButtonStyle.Light" Click="@AddLine" />
+
+    <div class="pos-pay-row">
+        <span>Paid</span>
+        <strong>@PaidTotal.ToString("C2")</strong>
+    </div>
+    <div class="pos-pay-row pos-pay-change">
+        <span>Remaining</span>
+        <strong class="@(Math.Abs(Remaining) < 0.005m ? "text-ok" : "text-warn")">@Remaining.ToString("C2")</strong>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_validationMessage))
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" ShowIcon="true" Size="AlertSize.Small">
+            @_validationMessage
+        </RadzenAlert>
+    }
+
+    @if (HasCreditLine)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" ShowIcon="true" Size="AlertSize.Small">
+            Credit/Udhaar split requires a selected customer on the POS screen.
+        </RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@Cancel" />
+        <RadzenButton Text="Complete sale" Icon="check" ButtonStyle="ButtonStyle.Primary"
+                      Disabled="@(!CanComplete)" Click="@Confirm" />
+    </RadzenStack>
+</RadzenStack>
+
+<style>
+    .pos-pay-table-wrap {
+        overflow-x: auto;
+    }
+
+    .pos-pay-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .pos-pay-table th,
+    .pos-pay-table td {
+        padding: 0.35rem;
+        border-bottom: 1px solid #e5e7eb;
+        vertical-align: middle;
+    }
+
+    .pos-pay-table th {
+        text-align: left;
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+
+    .pos-pay-amount {
+        width: 100%;
+        min-height: 36px;
+        box-sizing: border-box;
+    }
+</style>
+
+@code {
+    [Parameter] public decimal Total { get; set; }
+
+    private readonly string[] _methods = ["Cash", "Card", "Other", "Credit"];
+    private readonly List<PaymentLineEditor> _lines = [];
+    private string? _validationMessage;
+
+    private decimal PaidTotal => Math.Round(_lines.Sum(l => l.Amount), 2);
+    private decimal Remaining => Math.Round(Total - PaidTotal, 2);
+    private bool HasCreditLine => _lines.Any(l => l.Method == "Credit" && l.Amount > 0);
+    private bool CanComplete => _lines.Count > 0
+                                && _lines.All(l => l.Amount > 0)
+                                && Math.Abs(Remaining) < 0.005m;
+
+    protected override void OnParametersSet()
+    {
+        if (_lines.Count == 0)
+        {
+            _lines.Add(new PaymentLineEditor
+            {
+                Method = "Cash",
+                Amount = Math.Round(Total, 2)
+            });
+        }
+    }
+
+    private void OnAmountInput(PaymentLineEditor line, string? value)
+    {
+        if (decimal.TryParse(value, out var amount))
+        {
+            line.Amount = Math.Round(Math.Max(0m, amount), 2);
+        }
+        else if (string.IsNullOrWhiteSpace(value))
+        {
+            line.Amount = 0m;
+        }
+
+        Recalculate();
+    }
+
+    private void Recalculate()
+    {
+        _validationMessage = null;
+        StateHasChanged();
+    }
+
+    private void AddLine()
+    {
+        var remaining = Math.Round(Remaining, 2);
+
+        if (remaining <= 0)
+        {
+            _validationMessage = "There is no remaining amount. Reduce an existing payment line before adding another one.";
+            StateHasChanged();
+            return;
+        }
+
+        var nextMethod = _lines.Any(l => l.Method == "Card") ? "Cash" : "Card";
+
+        _lines.Add(new PaymentLineEditor
+        {
+            Method = nextMethod,
+            Amount = remaining
+        });
+
+        _validationMessage = null;
+        StateHasChanged();
+    }
+
+    private void Remove(PaymentLineEditor line)
+    {
+        if (_lines.Count <= 1)
+        {
+            return;
+        }
+
+        _lines.Remove(line);
+        _validationMessage = null;
+        StateHasChanged();
+    }
+
+    private void Cancel() => DialogService.Close(null);
+
+    private void Confirm()
+    {
+        if (!CanComplete)
+        {
+            _validationMessage = "Payment total must exactly match the invoice total.";
+            return;
+        }
+
+        var lines = _lines
+            .Where(l => l.Amount > 0)
+            .Select(l => new PosPaymentLineDto
+            {
+                Method = l.Method,
+                Amount = Math.Round(l.Amount, 2),
+                Reference = string.IsNullOrWhiteSpace(l.Reference) ? null : l.Reference.Trim()
+            })
+            .ToList();
+
+        DialogService.Close(lines);
+    }
+
+    private sealed class PaymentLineEditor
+    {
+        public Guid Id { get; } = Guid.NewGuid();
+        public string Method { get; set; } = "Cash";
+        public decimal Amount { get; set; }
+        public string? Reference { get; set; }
+    }
+}

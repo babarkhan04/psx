@@ -1,0 +1,116 @@
+@inject IUserAdminService UserService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="UserEditModel" Data="@Model" Submit="@OnSubmit">
+    <DataAnnotationsValidator />
+    <RadzenStack Gap="1rem">
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Display name" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.DisplayName" Name="DisplayName" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="DisplayName" Text="Display name is required" Popup="true" />
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Email" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Email" Name="Email" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Email" Text="Email is required" Popup="true" />
+                <RadzenEmailValidator Component="Email" Text="Invalid email" Popup="true" />
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenFormField Text="@(Model.IsNew ? "Password" : "New password (leave blank to keep current)")"
+                         Variant="Variant.Outlined" Style="width:100%">
+            <RadzenPassword @bind-Value="Model.Password" Name="Password" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Roles" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenDropDown @bind-Value="Model.Roles" Data="@Roles" Multiple="true" AllowClear="true"
+                            Chips="true" Placeholder="Assign roles" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Stores" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenDropDown @bind-Value="_selectedStoreIds" Data="@Stores" TextProperty="Name" ValueProperty="Id"
+                            Multiple="true" AllowClear="true" Chips="true" Placeholder="Assign stores"
+                            Change="@OnStoresChanged" />
+        </RadzenFormField>
+
+        @if (_selectedStoreIds.Count > 0)
+        {
+            <RadzenFormField Text="Default store" Variant="Variant.Outlined" Style="width:100%">
+                <RadzenDropDown @bind-Value="Model.DefaultStoreId" Data="@DefaultStoreOptions"
+                                TextProperty="Name" ValueProperty="Id" AllowClear="true" />
+            </RadzenFormField>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenCheckBox @bind-Value="Model.IsActive" Name="IsActive" />
+            <RadzenLabel Text="Active (can sign in)" Component="IsActive" />
+        </RadzenStack>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Save" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public UserEditModel Model { get; set; } = new();
+    [Parameter] public IReadOnlyList<string> Roles { get; set; } = [];
+    [Parameter] public IReadOnlyList<StoreDto> Stores { get; set; } = [];
+
+    private IList<Guid> _selectedStoreIds = [];
+    private bool _saving;
+    private string? _error;
+
+    private IEnumerable<StoreDto> DefaultStoreOptions =>
+        Stores.Where(s => _selectedStoreIds.Contains(s.Id));
+
+    protected override void OnInitialized()
+    {
+        _selectedStoreIds = Model.StoreIds.ToList();
+    }
+
+    private void OnStoresChanged()
+    {
+        Model.StoreIds = _selectedStoreIds.ToList();
+        if (Model.DefaultStoreId is { } def && !_selectedStoreIds.Contains(def))
+        {
+            Model.DefaultStoreId = null;
+        }
+    }
+
+    private async Task OnSubmit()
+    {
+        Model.StoreIds = _selectedStoreIds.ToList();
+        if (Model.IsNew && string.IsNullOrWhiteSpace(Model.Password))
+        {
+            _error = "A password is required for new users.";
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+
+        Result result = Model.IsNew
+            ? await UserService.CreateAsync(Model)
+            : await UserService.UpdateAsync(Model);
+
+        _saving = false;
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

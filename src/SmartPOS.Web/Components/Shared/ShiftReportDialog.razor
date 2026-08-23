@@ -1,0 +1,107 @@
+@inject DialogService DialogService
+@inject IJSRuntime JS
+
+@if (Report is null)
+{
+    <p class="customer-ledger-empty">Report not available.</p>
+}
+else
+{
+    <div id="sp-shift-report-print-area" class="shift-report printable-shift-report">
+        <div class="shift-report-title">
+            <div>
+                <h2>@Title</h2>
+                <p>@Report.StoreName · @Report.RegisterName</p>
+            </div>
+            <span class="status-pill @(Report.Status == "Open" ? "on" : "off")">@Report.Status</span>
+        </div>
+
+        <div class="receive-payment-summary">
+            <div><span>Shift</span><strong>@Report.ShiftNumber</strong></div>
+            <div><span>Opened by</span><strong>@Report.OpenedByName</strong></div>
+            <div><span>Opened</span><strong>@Report.OpenedOn.ToLocalTime().ToString("dd MMM yyyy · h:mm tt")</strong></div>
+            <div><span>Closed</span><strong>@(Report.ClosedOn?.ToLocalTime().ToString("dd MMM yyyy · h:mm tt") ?? "Still open")</strong></div>
+        </div>
+
+        <div class="kpi-grid" style="margin:1rem 0">
+            <div class="kpi-card">
+                <div class="kpi-top"><span class="kpi-label">Gross sales</span></div>
+                <div class="kpi-value" style="font-size:1.2rem">@Report.GrossSales.ToString("C0")</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-top"><span class="kpi-label">Transactions</span></div>
+                <div class="kpi-value" style="font-size:1.2rem">@Report.SaleCount</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-top"><span class="kpi-label">Expected cash</span></div>
+                <div class="kpi-value" style="font-size:1.2rem">@Report.ExpectedCash.ToString("C0")</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-top"><span class="kpi-label">Variance</span></div>
+                <div class="kpi-value @(Report.Variance != 0 ? "text-warn" : "text-ok")" style="font-size:1.2rem">@Report.Variance.ToString("C0")</div>
+            </div>
+        </div>
+
+        <div class="shift-report-section-title">Cash summary</div>
+        <table class="shift-report-table">
+            <tbody>
+                <tr><td>Opening float</td><td>@Report.OpeningFloat.ToString("C2")</td></tr>
+                <tr><td>Cash sales</td><td>@Report.CashSales.ToString("C2")</td></tr>
+                <tr><td>Cash refunds</td><td>@Report.CashRefunds.ToString("C2")</td></tr>
+                <tr><td>Cash in</td><td>@Report.CashIn.ToString("C2")</td></tr>
+                <tr><td>Cash out</td><td>-@Report.CashOut.ToString("C2")</td></tr>
+                <tr><td>No-sale drawer opens</td><td>@Report.NoSaleDrawerOpenCount</td></tr>
+                <tr><td>Expected cash</td><td><strong>@Report.ExpectedCash.ToString("C2")</strong></td></tr>
+                @if (Report.Status == "Closed")
+                {
+                    <tr><td>Counted cash</td><td><strong>@Report.CountedCash.ToString("C2")</strong></td></tr>
+                    <tr><td>Variance</td><td><strong class="@(Report.Variance != 0 ? "text-warn" : "text-ok")">@Report.Variance.ToString("C2")</strong></td></tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="shift-report-section-title">Non-cash summary</div>
+        <table class="shift-report-table">
+            <tbody>
+                <tr><td>Card sales</td><td>@Report.CardSales.ToString("C2")</td></tr>
+                <tr><td>Credit / Udhaar sales</td><td>@Report.CreditSales.ToString("C2")</td></tr>
+            </tbody>
+        </table>
+
+        @if (Report.Denominations.Any())
+        {
+            <div class="shift-report-section-title">Cash denomination count</div>
+            <table class="shift-report-table denomination-report-table">
+                <thead>
+                    <tr><th>Note / Coin</th><th>Qty</th><th>Amount</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var line in Report.Denominations)
+                    {
+                        <tr>
+                            <td>@line.DenominationValue.ToString("C0")</td>
+                            <td>@line.Quantity</td>
+                            <td>@line.Amount.ToString("C2")</td>
+                        </tr>
+                    }
+                    <tr>
+                        <td colspan="2"><strong>Total counted from denominations</strong></td>
+                        <td><strong>@Report.Denominations.Sum(x => x.Amount).ToString("C2")</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Style="margin-top:1rem" Gap="0.5rem" class="no-print">
+            <RadzenButton Icon="print" Text="Print" ButtonStyle="ButtonStyle.Light" Click="@(() => PrintAsync())" />
+            <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Primary" Click="@(() => DialogService.Close(false))" />
+        </RadzenStack>
+    </div>
+}
+
+@code {
+    [Parameter] public ShiftReportDto? Report { get; set; }
+    [Parameter] public string Title { get; set; } = "Shift report";
+
+    private ValueTask PrintAsync() => JS.InvokeVoidAsync("smartPosPrintStation.printShiftReport", "sp-shift-report-print-area", Title);
+}

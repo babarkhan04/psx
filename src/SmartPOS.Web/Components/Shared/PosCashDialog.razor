@@ -1,0 +1,35 @@
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem" class="pos-pay-dialog">
+    <RadzenText TextStyle="TextStyle.H5" Style="margin:0">Cash payment</RadzenText>
+    <div class="pos-pay-row">
+        <span>Total due</span>
+        <strong>@Total.ToString("C2")</strong>
+    </div>
+    <RadzenFormField Text="Amount tendered" Variant="Variant.Outlined" Style="width:100%">
+        <RadzenNumeric @bind-Value="_tendered" Min="0" Format="C2" Style="width:100%" />
+    </RadzenFormField>
+    <div class="pos-pay-row pos-pay-change">
+        <span>Change</span>
+        <strong class="@(Change >= 0 ? "text-ok" : "text-warn")">@Change.ToString("C2")</strong>
+    </div>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@Cancel" />
+        <RadzenButton Text="Complete sale" Icon="check" ButtonStyle="ButtonStyle.Primary"
+                      Disabled="@(Change < 0)" Click="@Confirm" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public decimal Total { get; set; }
+
+    private decimal _tendered;
+
+    private decimal Change => _tendered - Total;
+
+    protected override void OnParametersSet() => _tendered = Total;
+
+    private void Cancel() => DialogService.Close(null);
+
+    private void Confirm() => DialogService.Close(_tendered);
+}

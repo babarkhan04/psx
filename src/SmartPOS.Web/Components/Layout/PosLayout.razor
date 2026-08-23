@@ -1,0 +1,68 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+
+<div class="pos-shell">
+    <header class="pos-topbar">
+        <div class="pos-topbar-left">
+            <a href="/dashboard" class="pos-back-btn" title="Exit POS">
+                <RadzenIcon Icon="arrow_back" />
+            </a>
+            <div class="pos-location">
+                <RadzenIcon Icon="store" />
+                <span>@StoreLabel</span>
+            </div>
+        </div>
+        <div class="pos-topbar-center">
+            <span class="pos-clock">@ClockLabel</span>
+        </div>
+        <div class="pos-topbar-right">
+            <span class="pos-shortcut-hint"><kbd>F1</kbd> Help · <kbd>F2</kbd> Scan · <kbd>F4</kbd> Customer · <kbd>F8</kbd> Payment · <kbd>Alt+L</kbd> Lock · <kbd>Alt+J</kbd> Display</span>
+        </div>
+    </header>
+    <main class="pos-main">
+        @Body
+    </main>
+</div>
+
+<RadzenNotification />
+<RadzenDialog />
+<RadzenTooltip />
+
+@code {
+    [Inject] private IStoreContext StoreContext { get; set; } = default!;
+    [Inject] private IStoreService StoreService { get; set; } = default!;
+
+    private string StoreLabel { get; set; } = "Loading…";
+    private string ClockLabel { get; set; } = string.Empty;
+    private System.Threading.Timer? _clockTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Always call GetAllAsync (gate-protected) so we get store names WITHOUT
+        // needing a separate GetAsync call (which has no gate and would race with
+        // Pos.razor's OnAfterRenderAsync that also uses the gate).
+        var stores = await StoreService.GetAllAsync(includeInactive: false);
+
+        if (StoreContext.StoreId is null && stores.Count > 0)
+        {
+            StoreContext.SetStore(stores[0].Id);
+        }
+
+        if (StoreContext.StoreId is { } storeId)
+        {
+            var s = stores.FirstOrDefault(s => s.Id == storeId);
+            StoreLabel = s is null ? "Store" : $"{s.Code} · {s.Name}";
+        }
+
+        UpdateClock();
+        _clockTimer = new System.Threading.Timer(_ => InvokeAsync(() =>
+        {
+            UpdateClock();
+            StateHasChanged();
+        }), null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
+    }
+
+    private void UpdateClock() => ClockLabel = DateTime.Now.ToString("MMM d, yyyy · h:mm tt");
+
+    public void Dispose() => _clockTimer?.Dispose();
+}

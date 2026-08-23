@@ -1,0 +1,40 @@
+@inject DialogService DialogService
+
+@if (Detail is null)
+{
+    <p class="customer-ledger-empty">Not found.</p>
+}
+else
+{
+    <div class="receive-payment-summary">
+        <div><span>GRN #</span><strong>@Detail.PurchaseNumber</strong></div>
+        <div><span>Status</span><strong>@Detail.Status</strong></div>
+    </div>
+    <p class="pos-receipt-meta">@Detail.SupplierName · @Detail.StoreName</p>
+
+    <RadzenDataGrid Data="@Detail.Lines" TItem="PurchaseLineDetailDto" AllowPaging="false">
+        <Columns>
+            <RadzenDataGridColumn TItem="PurchaseLineDetailDto" Property="Sku" Title="SKU" Width="120px" />
+            <RadzenDataGridColumn TItem="PurchaseLineDetailDto" Property="ProductName" Title="Product" />
+            <RadzenDataGridColumn TItem="PurchaseLineDetailDto" Property="Quantity" Title="Qty" Width="90px" />
+            <RadzenDataGridColumn TItem="PurchaseLineDetailDto" Property="UnitCost" Title="Cost" Width="110px" TextAlign="TextAlign.End">
+                <Template Context="l">@l.UnitCost.ToString("C2")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="PurchaseLineDetailDto" Property="LineTotal" Title="Total" Width="110px" TextAlign="TextAlign.End">
+                <Template Context="l">@l.LineTotal.ToString("C2")</Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+
+    <div class="pos-receipt-totals" style="margin-top:1rem">
+        <div class="pos-total-due"><span>Total</span><span>@Detail.TotalAmount.ToString("C2")</span></div>
+    </div>
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Style="margin-top:1rem">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Primary" Click="@(() => DialogService.Close(false))" />
+    </RadzenStack>
+}
+
+@code {
+    [Parameter] public PurchaseDetailDto? Detail { get; set; }
+}

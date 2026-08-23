@@ -1,0 +1,108 @@
+@inject IStoreService StoreService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="StoreDto" Data="@Model" Submit="@OnSubmit">
+    <DataAnnotationsValidator />
+    <RadzenStack Gap="1rem">
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Code" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Code" Name="Code" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Code" Text="Code is required" Popup="true" />
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="8">
+                <RadzenFormField Text="Store name" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Name" Name="Name" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Name" Text="Name is required" Popup="true" />
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenFormField Text="Address line 1" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextBox @bind-Value="Model.AddressLine1" />
+        </RadzenFormField>
+        <RadzenFormField Text="Address line 2" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextBox @bind-Value="Model.AddressLine2" />
+        </RadzenFormField>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="City" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.City" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Region / State" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Region" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Postal code" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.PostalCode" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Country" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Country" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Phone" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Phone" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Email" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Email" Name="Email" />
+                </RadzenFormField>
+                <RadzenEmailValidator Component="Email" Text="Invalid email" Popup="true" />
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenCheckBox @bind-Value="Model.IsActive" Name="IsActive" />
+            <RadzenLabel Text="Active" Component="IsActive" />
+        </RadzenStack>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Save" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public StoreDto Model { get; set; } = new();
+
+    private bool _saving;
+    private string? _error;
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+
+        Result result = Model.Id == Guid.Empty
+            ? await StoreService.CreateAsync(Model)
+            : await StoreService.UpdateAsync(Model);
+
+        _saving = false;
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

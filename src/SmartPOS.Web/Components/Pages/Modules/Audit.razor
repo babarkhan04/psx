@@ -1,0 +1,148 @@
+@page "/audit"
+@attribute [Authorize(Policy = Permissions.Insights.AuditView)]
+@inject IAuditLogService AuditLogService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+
+<PageTitle>Audit Trail · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Audit Trail</h1>
+        <p class="page-subtitle">Every important create, update, delete, sale, stock, cash, and purchase action is traceable.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown TValue="Guid?" @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Text" ValueProperty="Value"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Change="@LoadAsync" Style="min-width:220px" />
+        <RadzenDatePicker @bind-Value="_from" DateFormat="dd MMM yyyy" Change="@LoadAsync" Style="width:150px" ShowTime="false" />
+        <RadzenDatePicker @bind-Value="_to" DateFormat="dd MMM yyyy" Change="@LoadAsync" Style="width:150px" ShowTime="false" />
+        <RadzenButton Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" />
+    </div>
+</div>
+
+<RadzenCard class="content-card">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.75rem" AlignItems="AlignItems.Center" Style="margin-bottom:1rem;flex-wrap:wrap">
+        <RadzenTextBox @bind-Value="_search" Placeholder="Search action, entity, user, values..." Style="min-width:280px" Change="@LoadAsync" />
+        <RadzenDropDown TValue="string" @bind-Value="_action" Data="@_actions" Placeholder="Action" AllowClear="true" Change="@LoadAsync" Style="width:150px" />
+        <RadzenDropDown TValue="string" @bind-Value="_entityName" Data="@_entityNames" Placeholder="Entity" AllowClear="true" Change="@LoadAsync" Style="width:180px" />
+        <RadzenNumeric TValue="int" @bind-Value="_take" Min="50" Max="1000" Step="50" Change="@LoadAsync" Style="width:120px" />
+    </RadzenStack>
+
+    <RadzenDataGrid Data="@_logs" TItem="AuditLogDto" AllowSorting="true" AllowPaging="true" PageSize="20"
+                    IsLoading="@_loading" EmptyText="No audit entries found.">
+        <Columns>
+            <RadzenDataGridColumn TItem="AuditLogDto" Property="CreatedOn" Title="When" Width="170px">
+                <Template Context="row">@row.CreatedOn.ToLocalTime().ToString("g")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="AuditLogDto" Property="Action" Title="Action" Width="110px">
+                <Template Context="row">
+                    <span class="status-pill @(row.Action == "Delete" ? "off" : "on")">@row.Action</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="AuditLogDto" Property="EntityName" Title="Entity" Width="140px" />
+            <RadzenDataGridColumn TItem="AuditLogDto" Property="Summary" Title="Summary" />
+            <RadzenDataGridColumn TItem="AuditLogDto" Property="StoreName" Title="Store" Width="180px" />
+            <RadzenDataGridColumn TItem="AuditLogDto" Property="UserName" Title="User" Width="160px" />
+            <RadzenDataGridColumn TItem="AuditLogDto" Title="Details" Width="90px" TextAlign="TextAlign.Center">
+                <Template Context="row">
+                    <RadzenButton Icon="visibility" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => Select(row))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@if (_selected is not null)
+{
+    <RadzenCard class="content-card" Style="margin-top:1rem">
+        <div class="page-header" style="margin-bottom:0.75rem">
+            <div>
+                <h2 class="page-title" style="font-size:1.15rem">Audit details</h2>
+                <p class="page-subtitle">@_selected.Action @_selected.EntityName · @_selected.CreatedOn.ToLocalTime().ToString("f")</p>
+            </div>
+            <RadzenButton Icon="close" Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => _selected = null)" />
+        </div>
+
+        <div class="audit-detail-grid">
+            <div>
+                <h3>Old values</h3>
+                <pre>@FormatJson(_selected.OldValuesJson)</pre>
+            </div>
+            <div>
+                <h3>New values</h3>
+                <pre>@FormatJson(_selected.NewValuesJson)</pre>
+            </div>
+        </div>
+
+        <table class="shift-report-table" style="margin-top:1rem">
+            <tbody>
+                <tr><td>Entity ID</td><td>@_selected.EntityId</td></tr>
+                <tr><td>User</td><td>@_selected.UserName (@_selected.UserId)</td></tr>
+                <tr><td>Store</td><td>@_selected.StoreName</td></tr>
+                <tr><td>IP Address</td><td>@_selected.IpAddress</td></tr>
+                <tr><td>Correlation ID</td><td>@_selected.CorrelationId</td></tr>
+            </tbody>
+        </table>
+    </RadzenCard>
+}
+
+@code {
+    private IReadOnlyList<AuditLogDto> _logs = [];
+    private List<StoreFilterOption> _storeOptions = [new("All stores", null)];
+    private readonly List<string> _actions = ["Create", "Update", "Delete"];
+    private readonly List<string> _entityNames =
+    [
+        "Sale", "SaleLine", "Payment", "SaleReturn", "Stock", "StockLedger", "Shift", "CashMovement",
+        "Product", "ProductVariant", "ProductBarcode", "ProductPrice", "Purchase", "PurchaseLine",
+        "Customer", "Supplier", "Store", "Register", "Category", "Brand", "TaxCategory", "UnitOfMeasure"
+    ];
+
+    private Guid? _storeId;
+    private string? _search;
+    private string? _action;
+    private string? _entityName;
+    private DateTime? _from = DateTime.Today.AddDays(-7);
+    private DateTime? _to;
+    private int _take = 200;
+    private bool _loading;
+    private AuditLogDto? _selected;
+
+    private sealed record StoreFilterOption(string Text, Guid? Value);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeOptions.AddRange(stores.Select(s => new StoreFilterOption($"{s.Code} · {s.Name}", s.Id)));
+        if (StoreContext.StoreId is { } selectedStore && stores.Any(s => s.Id == selectedStore))
+        {
+            _storeId = selectedStore;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        _logs = await AuditLogService.GetAsync(new AuditQueryDto
+        {
+            StoreId = _storeId,
+            Search = _search,
+            Action = _action,
+            EntityName = _entityName,
+            FromUtc = _from?.Date.ToUniversalTime(),
+            ToUtc = _to?.Date.AddDays(1).ToUniversalTime(),
+            Take = _take
+        });
+
+        _loading = false;
+    }
+
+    private void Select(AuditLogDto row) => _selected = row;
+
+    private static string FormatJson(string? json) =>
+        string.IsNullOrWhiteSpace(json) ? "No values captured." : json;
+}

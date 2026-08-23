@@ -1,0 +1,40 @@
+@using SmartPOS.Shared.Contracts
+
+<ErrorBoundary @ref="errorBoundary">
+    <ChildContent>
+        @ChildContent
+    </ChildContent>
+    <ErrorContent Context="exception">
+        @{
+            _ = ErrorBoundaryLogger.LogErrorAsync(exception);
+            traceReference = CorrelationContext.CorrelationId;
+        }
+        <div class="error-boundary">
+            <RadzenCard class="error-card">
+                <RadzenIcon Icon="report_problem" Style="font-size:2.5rem;color:var(--rz-danger);" />
+                <h2>Something went wrong on this screen</h2>
+                <p>The error was logged automatically. If the problem persists, contact support with the trace reference below.</p>
+                <code>@traceReference</code>
+                <div class="error-actions">
+                    <RadzenButton Text="Try again" Icon="refresh" ButtonStyle="ButtonStyle.Primary"
+                                  Click="@Recover" />
+                    <RadzenButton Text="Go to dashboard" Icon="dashboard" ButtonStyle="ButtonStyle.Light"
+                                  Click="@(() => Navigation.NavigateTo("/dashboard", forceLoad: true))" />
+                </div>
+            </RadzenCard>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+    [Inject] private ICorrelationContext CorrelationContext { get; set; } = default!;
+    [Inject] private IErrorBoundaryLogger ErrorBoundaryLogger { get; set; } = default!;
+
+    private ErrorBoundary? errorBoundary;
+    private string traceReference = string.Empty;
+
+    private void Recover() => errorBoundary?.Recover();
+}

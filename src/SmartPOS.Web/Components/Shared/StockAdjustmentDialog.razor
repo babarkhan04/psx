@@ -1,0 +1,125 @@
+@inject IInventoryService InventoryService
+@inject IProductService ProductService
+@inject IStoreService StoreService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="StockAdjustmentDto" Data="@Model" Submit="@OnSubmit">
+    <RadzenStack Gap="1rem">
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Store" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenDropDown @bind-Value="Model.StoreId" Data="@Stores" TextProperty="Name" ValueProperty="Id"
+                                    Placeholder="Select store" Name="StoreId" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Movement type" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenDropDown @bind-Value="Model.MovementType" Data="@MovementTypes" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Reference" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Reference" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Notes" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Notes" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenText TextStyle="TextStyle.Subtitle2">Lines</RadzenText>
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.End">
+            <RadzenFormField Text="Product" Variant="Variant.Outlined" Style="flex:1">
+                <RadzenDropDown @bind-Value="_selectedProductId" Data="@Products" TextProperty="Name" ValueProperty="Id"
+                                Placeholder="Select product" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" AllowFiltering="true" />
+            </RadzenFormField>
+            <RadzenFormField Text="Qty change (+/-)" Variant="Variant.Outlined" Style="width:160px">
+                <RadzenNumeric @bind-Value="_qtyChange" Format="0.###" />
+            </RadzenFormField>
+            <RadzenButton Icon="add" Text="Add line" Click="@AddLine" Disabled="@(_selectedProductId == Guid.Empty || _qtyChange == 0)" />
+        </RadzenStack>
+
+        <RadzenDataGrid Data="@Model.Lines" TItem="StockAdjustmentLineDto" AllowPaging="false" EmptyText="Add product lines above.">
+            <Columns>
+                <RadzenDataGridColumn TItem="StockAdjustmentLineDto" Property="ProductName" Title="Product" />
+                <RadzenDataGridColumn TItem="StockAdjustmentLineDto" Property="QuantityChange" Title="Change" Width="120px" TextAlign="TextAlign.End" />
+                <RadzenDataGridColumn TItem="StockAdjustmentLineDto" Title="" Width="60px" TextAlign="TextAlign.End">
+                    <Template Context="line">
+                        <RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                      Click="@(() => Model.Lines.Remove(line))" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Post adjustment" IsBusy="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public StockAdjustmentDto Model { get; set; } = new();
+    [Parameter] public IReadOnlyList<LookupDto> Stores { get; set; } = [];
+    [Parameter] public IReadOnlyList<ProductListItemDto> Products { get; set; } = [];
+
+    private static readonly string[] MovementTypes =
+        ["Opening", "Adjustment", "Damage", "Loss"];
+
+    private Guid _selectedProductId;
+    private decimal _qtyChange;
+    private bool _saving;
+    private string? _error;
+
+    private void AddLine()
+    {
+        var product = Products.FirstOrDefault(p => p.Id == _selectedProductId);
+        if (product is null || _qtyChange == 0)
+        {
+            return;
+        }
+
+        Model.Lines.Add(new StockAdjustmentLineDto
+        {
+            ProductId = product.Id,
+            ProductName = product.Name,
+            QuantityChange = _qtyChange
+        });
+        _selectedProductId = Guid.Empty;
+        _qtyChange = 0;
+    }
+
+    private async Task OnSubmit()
+    {
+        if (Model.StoreId == Guid.Empty)
+        {
+            _error = "Select a store.";
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+        var result = await InventoryService.PostAdjustmentAsync(Model);
+        _saving = false;
+
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

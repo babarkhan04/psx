@@ -1,0 +1,223 @@
+@inject DialogService DialogService
+@inject IJSRuntime Js
+@inject IPosService PosService
+@inject IPrintSettingsService PrintSettingsService
+@inject NotificationService Notifications
+
+<div class="sp-receipt-dialog-shell">
+    <div class="sp-receipt-preview-toolbar">
+        <div>
+            <strong>@(Reprint ? "Receipt reprint" : "Sale receipt")</strong>
+            <span>@Receipt.SaleNumber</span>
+        </div>
+        <div class="sp-receipt-print-actions">
+            <RadzenButton Text="Print 80mm" Icon="receipt_long" ButtonStyle="ButtonStyle.Primary" Click='@(() => PrintAsync("thermal"))' />
+            <RadzenButton Text="Print A4" Icon="description" ButtonStyle="ButtonStyle.Light" Click='@(() => PrintAsync("a4"))' />
+            <RadzenButton Text="A4 Invoice" Icon="article" ButtonStyle="ButtonStyle.Light" Click="@(() => OpenA4InvoiceAsync())" />
+        </div>
+    </div>
+
+    <div id="@_printElementId" class="sp-print-receipt sp-print-receipt-preview">
+        <header class="sp-print-receipt-header">
+            @if (_template.ShowStoreName)
+            {
+                <div class="sp-print-receipt-brand">@ReceiptBusinessName</div>
+            }
+            <div class="sp-print-receipt-subtitle">@(string.IsNullOrWhiteSpace(_template.Subtitle) ? "Retail POS Receipt" : _template.Subtitle)</div>
+            @if (!string.IsNullOrWhiteSpace(_template.HeaderText))
+            {
+                <small>@_template.HeaderText</small>
+            }
+            <div class="sp-print-receipt-divider"></div>
+            <div class="sp-print-receipt-number">@Receipt.SaleNumber</div>
+            @if (Reprint)
+            {
+                <div class="sp-print-receipt-duplicate">DUPLICATE COPY · Print #@(Receipt.ReprintCount + 1)</div>
+            }
+        </header>
+
+        <section class="sp-print-receipt-meta-grid">
+            <div><span>Date</span><strong>@Receipt.CompletedOn.ToLocalTime().ToString("dd MMM yyyy")</strong></div>
+            <div><span>Time</span><strong>@Receipt.CompletedOn.ToLocalTime().ToString("h:mm tt")</strong></div>
+            <div><span>Register</span><strong>@Receipt.RegisterName</strong></div>
+            @if (_template.ShowCashier)
+            {
+                <div><span>Cashier</span><strong>@(string.IsNullOrWhiteSpace(Receipt.CashierName) ? "-" : Receipt.CashierName)</strong></div>
+            }
+            @if (_template.ShowCustomer)
+            {
+                <div class="sp-print-receipt-meta-wide"><span>Customer</span><strong>@Receipt.CustomerName</strong></div>
+            }
+            @if (_template.ShowPaymentSummary)
+            {
+                <div class="sp-print-receipt-meta-wide"><span>Payment</span><strong>@Receipt.PaymentMethod</strong></div>
+            }
+        </section>
+
+        <section class="sp-print-receipt-items">
+            <div class="sp-print-receipt-items-head"><span>Item</span><span>Qty</span><span>Amount</span></div>
+            @foreach (var line in Receipt.Lines)
+            {
+                <div class="sp-print-receipt-item">
+                    <div class="sp-print-receipt-item-name">
+                        <strong>@line.Name</strong>
+                        @if (_template.ShowItemSku)
+                        {
+                            <small>@line.Sku · @line.UnitPrice.ToString("C2") each</small>
+                        }
+                        @if (_template.ShowDiscountDetails && line.DiscountAmount > 0)
+                        {
+                            <small>Less discount: @line.DiscountAmount.ToString("C2")@(string.IsNullOrWhiteSpace(line.DiscountReason) ? string.Empty : $" · {line.DiscountReason}")</small>
+                        }
+                    </div>
+                    <div class="sp-print-receipt-item-qty">@line.Quantity.ToString("0.###")</div>
+                    <div class="sp-print-receipt-item-total">@line.LineTotal.ToString("C2")</div>
+                </div>
+            }
+        </section>
+
+        <section class="sp-print-receipt-totals">
+            <div><span>Subtotal</span><strong>@Receipt.Subtotal.ToString("C2")</strong></div>
+            @if (_template.ShowDiscountDetails && Receipt.DiscountAmount > 0)
+            {
+                <div><span>Invoice discount@(string.IsNullOrWhiteSpace(Receipt.DiscountReason) ? string.Empty : $" · {Receipt.DiscountReason}")</span><strong>-@Receipt.DiscountAmount.ToString("C2")</strong></div>
+            }
+            @if (_template.ShowTaxDetails)
+            {
+                <div><span>Tax</span><strong>@Receipt.TaxAmount.ToString("C2")</strong></div>
+            }
+            <div class="sp-print-receipt-grand"><span>Total</span><strong>@Receipt.TotalAmount.ToString("C2")</strong></div>
+            @if (_template.ShowPaymentSummary && Receipt.Payments.Count > 0)
+            {
+                @foreach (var payment in Receipt.Payments)
+                {
+                    <div><span>@payment.Method@(string.IsNullOrWhiteSpace(payment.Reference) ? string.Empty : $" · {payment.Reference}")</span><strong>@payment.Amount.ToString("C2")</strong></div>
+                }
+            }
+            @if (Receipt.ChangeDue > 0)
+            {
+                <div><span>Change due</span><strong>@Receipt.ChangeDue.ToString("C2")</strong></div>
+            }
+        </section>
+
+        <section class="sp-print-receipt-footer">
+            @if (_template.ShowReceiptNumberBox)
+            {
+                <div class="sp-print-receipt-code"><span>Receipt ID</span><strong>@Receipt.SaleNumber</strong></div>
+            }
+            <p>@(string.IsNullOrWhiteSpace(_template.FooterText) ? "Thank you for shopping with us." : _template.FooterText)</p>
+            <small>@(string.IsNullOrWhiteSpace(_template.ReturnPolicyText) ? "Goods sold are subject to the store return policy. Please keep this receipt for exchange, return, or warranty reference." : _template.ReturnPolicyText)</small>
+            @if (_template.ShowPrintedBy)
+            {
+                <small class="sp-print-receipt-system">Printed by SmartPOS · @DateTime.Now.ToString("dd MMM yyyy h:mm tt")</small>
+            }
+        </section>
+    </div>
+
+    @if (Reprint && Receipt.ReprintLogs.Count > 0)
+    {
+        <div class="pos-reprint-log sp-receipt-reprint-panel">
+            <strong>Recent reprints</strong>
+            @foreach (var log in Receipt.ReprintLogs)
+            {
+                <div><span>@log.ReprintedOn.ToLocalTime().ToString("dd MMM · h:mm tt")</span><span>@log.ReprintedByName</span><em>@log.Reason</em></div>
+            }
+        </div>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End" Style="margin-top:1rem">
+        @if (Reprint)
+        {
+            <RadzenButton Text="Close" Icon="close" ButtonStyle="ButtonStyle.Primary" Click="@(() => Close())" />
+        }
+        else
+        {
+            <RadzenButton Text="New sale" Icon="add_shopping_cart" ButtonStyle="ButtonStyle.Primary" Click="@(() => Close())" />
+        }
+    </RadzenStack>
+</div>
+
+@code {
+    [Parameter] public PosReceiptDto Receipt { get; set; } = default!;
+    [Parameter] public bool Reprint { get; set; }
+
+    private readonly string _printElementId = $"sp-receipt-{Guid.NewGuid():N}";
+    private ReceiptTemplateDto _template = new();
+    private PrintStationSettingDto _station = new();
+    private bool _autoPrintTriggered;
+
+    private string ReceiptBusinessName => string.IsNullOrWhiteSpace(_template.BusinessName) ? Receipt.StoreName : _template.BusinessName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _template = await PrintSettingsService.GetReceiptTemplateAsync(Receipt.StoreId);
+        _station = await PrintSettingsService.GetPrintStationAsync(Receipt.StoreId, Receipt.RegisterId);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_autoPrintTriggered && !Reprint && (_template.AutoPrintAfterSale || _station.AutoPrintReceipt))
+        {
+            _autoPrintTriggered = true;
+            await PrintAsync(string.IsNullOrWhiteSpace(_station.DefaultReceiptMode) ? _template.PaperSize : _station.DefaultReceiptMode);
+        }
+    }
+
+    private async Task PrintAsync(string mode)
+    {
+        if (Reprint)
+        {
+            var request = await DialogService.OpenAsync<ReceiptReprintReasonDialog>(
+                "Reason for reprint",
+                new Dictionary<string, object?> { [nameof(ReceiptReprintReasonDialog.SaleId)] = Receipt.SaleId },
+                new DialogOptions { Width = "460px", CloseDialogOnOverlayClick = false });
+
+            if (request is not ReceiptReprintRequestDto dto)
+            {
+                return;
+            }
+
+            var result = await PosService.LogReceiptReprintAsync(dto);
+            if (!result.Succeeded)
+            {
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Error,
+                    Summary = "Reprint not logged",
+                    Detail = result.Error ?? "Could not save reprint reason.",
+                    Duration = 4000
+                });
+                return;
+            }
+
+            Receipt.ReprintCount += 1;
+            Receipt.ReprintLogs =
+            [
+                new ReceiptReprintLogDto
+                {
+                    Id = Guid.NewGuid(),
+                    Reason = dto.Reason,
+                    ReprintedByName = "Current user",
+                    ReprintedOn = DateTime.UtcNow
+                },
+                .. Receipt.ReprintLogs.Take(4)
+            ];
+        }
+
+        var copies = Math.Max(1, _station.ReceiptCopies);
+        for (var i = 0; i < copies; i++)
+        {
+            await Js.InvokeVoidAsync("smartPosPrintStation.printElement", _printElementId, mode, Receipt.SaleNumber, _station);
+        }
+    }
+
+    private async Task OpenA4InvoiceAsync()
+    {
+        await DialogService.OpenAsync<A4InvoiceDialog>(
+            "A4 Invoice",
+            new Dictionary<string, object?> { [nameof(A4InvoiceDialog.Receipt)] = Receipt },
+            new DialogOptions { Width = "900px", Resizable = true, Draggable = true });
+    }
+
+    private void Close() => DialogService.Close(true);
+}

@@ -1,0 +1,155 @@
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem" class="pos-discount-dialog">
+    <div>
+        <RadzenText TextStyle="TextStyle.H5" Style="margin:0">@Title</RadzenText>
+        <small>Maximum discount allowed: @MaxAmount.ToString("C2")</small>
+    </div>
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+        <RadzenButton Text="Amount" ButtonStyle="@(_mode == DiscountMode.Amount ? ButtonStyle.Primary : ButtonStyle.Light)" Click="@(() => SetMode(DiscountMode.Amount))" />
+        <RadzenButton Text="Percent" ButtonStyle="@(_mode == DiscountMode.Percent ? ButtonStyle.Primary : ButtonStyle.Light)" Click="@(() => SetMode(DiscountMode.Percent))" />
+    </RadzenStack>
+
+    @if (_mode == DiscountMode.Amount)
+    {
+        <RadzenNumeric TValue="decimal" @bind-Value="_amount" Min="0" Max="@MaxAmount" Step="1" Format="c2" Style="width:100%" Change="@(_ => ClampAmount())" />
+    }
+    else
+    {
+        <RadzenStack Gap="0.4rem">
+            <RadzenNumeric TValue="decimal" @bind-Value="_percent" Min="0" Max="100" Step="1" Format="0.##'%'" Style="width:100%" Change="@(_ => RecalculateFromPercent())" />
+            <small>Calculated discount: @CalculatedAmount.ToString("C2")</small>
+        </RadzenStack>
+    }
+
+    <RadzenTextBox @bind-Value="_reason" Placeholder="Discount reason, e.g. promotion, damaged box, manager approval" Style="width:100%" />
+
+    @if (!string.IsNullOrWhiteSpace(_validation))
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" ShowIcon="true" Size="AlertSize.Small">
+            @_validation
+        </RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="Remove discount" ButtonStyle="ButtonStyle.Light" Click="@Remove" />
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@Cancel" />
+        <RadzenButton Text="Apply discount" Icon="percent" ButtonStyle="ButtonStyle.Primary" Click="@ApplyAsync" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Apply discount";
+    [Parameter] public decimal MaxAmount { get; set; }
+    [Parameter] public decimal ExistingAmount { get; set; }
+    [Parameter] public string? ExistingReason { get; set; }
+    [Parameter] public bool RequireManagerApproval { get; set; }
+    [Parameter] public decimal ManagerApprovalThreshold { get; set; } = 0m;
+    [Parameter] public Guid? StoreId { get; set; }
+    [Parameter] public ManagerApprovalType ApprovalType { get; set; } = ManagerApprovalType.Discount;
+    [Parameter] public string? ApprovalReference { get; set; }
+
+    private DiscountMode _mode = DiscountMode.Amount;
+    private decimal _amount;
+    private decimal _percent;
+    private string? _reason;
+    private string? _validation;
+
+    private decimal CalculatedAmount => _mode == DiscountMode.Percent
+        ? Math.Round(MaxAmount * _percent / 100m, 2)
+        : Math.Round(_amount, 2);
+
+    protected override void OnParametersSet()
+    {
+        MaxAmount = Math.Max(0m, Math.Round(MaxAmount, 2));
+        _amount = Math.Min(Math.Max(0m, Math.Round(ExistingAmount, 2)), MaxAmount);
+        _percent = MaxAmount > 0 ? Math.Round(_amount / MaxAmount * 100m, 2) : 0m;
+        _reason = ExistingReason;
+    }
+
+    private void SetMode(DiscountMode mode)
+    {
+        _mode = mode;
+        _validation = null;
+        if (_mode == DiscountMode.Percent)
+        {
+            _percent = MaxAmount > 0 ? Math.Round(_amount / MaxAmount * 100m, 2) : 0m;
+        }
+        else
+        {
+            _amount = CalculatedAmount;
+        }
+    }
+
+    private void ClampAmount()
+    {
+        _amount = Math.Min(Math.Max(0m, Math.Round(_amount, 2)), MaxAmount);
+        _validation = null;
+    }
+
+    private void RecalculateFromPercent()
+    {
+        _percent = Math.Min(Math.Max(0m, Math.Round(_percent, 2)), 100m);
+        _validation = null;
+    }
+
+    private void Remove() => DialogService.Close(new PosDiscountResultDto { Amount = 0m, Reason = null });
+
+    private void Cancel() => DialogService.Close(null);
+
+    private async Task ApplyAsync()
+    {
+        var amount = CalculatedAmount;
+        if (amount < 0 || amount > MaxAmount)
+        {
+            _validation = $"Discount must be between 0 and {MaxAmount:0.00}.";
+            return;
+        }
+
+        if (amount > 0 && string.IsNullOrWhiteSpace(_reason))
+        {
+            _validation = "Please enter a reason for this discount.";
+            return;
+        }
+
+        var finalReason = string.IsNullOrWhiteSpace(_reason) ? null : _reason.Trim();
+
+        if (RequireManagerApproval && amount > ManagerApprovalThreshold)
+        {
+            var approval = await DialogService.OpenAsync<ManagerApprovalDialog>(
+                "Manager approval",
+                new Dictionary<string, object?>
+                {
+                    [nameof(ManagerApprovalDialog.StoreId)] = StoreId,
+                    [nameof(ManagerApprovalDialog.ApprovalType)] = ApprovalType,
+                    [nameof(ManagerApprovalDialog.Reference)] = ApprovalReference ?? Title,
+                    [nameof(ManagerApprovalDialog.Amount)] = Math.Round(amount, 2),
+                    [nameof(ManagerApprovalDialog.DefaultReason)] = finalReason,
+                    [nameof(ManagerApprovalDialog.Message)] = "This discount needs manager approval before it can be applied."
+                },
+                new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = false });
+
+            if (approval is not ManagerApprovalResultDto approved)
+            {
+                return;
+            }
+
+            finalReason = string.IsNullOrWhiteSpace(finalReason)
+                ? $"Approved by {approved.ApprovedByName}"
+                : $"{finalReason} | Approved by {approved.ApprovedByName}";
+        }
+
+        DialogService.Close(new PosDiscountResultDto
+        {
+            Amount = Math.Round(amount, 2),
+            Reason = finalReason
+        });
+    }
+
+    private enum DiscountMode
+    {
+        Amount,
+        Percent
+    }
+}

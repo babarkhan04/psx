@@ -1,0 +1,194 @@
+@page "/alerts"
+@attribute [Authorize(Policy = Permissions.Insights.AlertsView)]
+@inject IAlertService AlertService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject NavigationManager Nav
+
+<PageTitle>Smart Alerts · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Smart Alerts Center</h1>
+        <p class="page-subtitle">Prioritized alerts for stock, pricing, discounts, voids, returns, cash variance, open shifts, transfers, and dead stock.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Text" ValueProperty="Value"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Change="@(_ => LoadAsync())" Style="min-width:220px" />
+        <RadzenDropDown @bind-Value="_severity" Data="@_severityOptions" Change="@(_ => LoadAsync())" Style="width:145px" />
+        <RadzenDropDown @bind-Value="_type" Data="@_typeOptions" Change="@(_ => LoadAsync())" Style="width:150px" />
+        <RadzenDatePicker TValue="DateTime?" @bind-Value="_from" DateFormat="dd MMM yyyy" Change="@(_ => LoadAsync())" Style="width:155px" ShowTime="false" />
+        <RadzenDatePicker TValue="DateTime?" @bind-Value="_to" DateFormat="dd MMM yyyy" Change="@(_ => LoadAsync())" Style="width:155px" ShowTime="false" />
+        <label class="rz-display-flex rz-align-items-center rz-gap-2" style="white-space:nowrap">
+            <RadzenCheckBox TValue="bool" @bind-Value="_includeInfo" Change="@(_ => LoadAsync())" />
+            <span>Info</span>
+        </label>
+        <RadzenButton Icon="refresh" Text="Refresh" ButtonStyle="ButtonStyle.Light" Click="@(() => LoadAsync())" />
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="customer-ledger-loading"><RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" /></div>
+}
+else if (_model is not null)
+{
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Total alerts</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="notifications_active" /></span></div>
+            <div class="kpi-value">@_model.Summary.Total</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Critical</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="error" /></span></div>
+            <div class="kpi-value">@_model.Summary.Critical</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Warnings</span><span class="kpi-chip chip-cash"><RadzenIcon Icon="warning" /></span></div>
+            <div class="kpi-value">@_model.Summary.Warning</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Stock / cash risk</span><span class="kpi-chip chip-sales"><RadzenIcon Icon="inventory_2" /></span></div>
+            <div class="kpi-value">@(_model.Summary.StockAlerts + _model.Summary.CashAlerts)</div>
+            <div class="page-subtitle">@_model.Summary.StockAlerts stock · @_model.Summary.CashAlerts cash/shift</div>
+        </div>
+    </div>
+
+    <RadzenTabs>
+        <Tabs>
+            <RadzenTabsItem Text="All alerts">
+                <RadzenCard class="content-card grid-card">
+                    <RadzenDataGrid Data="@_model.Alerts" TItem="SmartAlertDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" Density="Density.Compact">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="Severity" Title="Severity" Width="115px">
+                                <Template Context="row">
+                                    <RadzenBadge BadgeStyle="@AlertSeverityStyle(row.Severity)" Text="@row.Severity" />
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="Type" Title="Type" Width="120px" />
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="Title" Title="Alert" Width="210px">
+                                <Template Context="row">
+                                    <strong>@row.Title</strong>
+                                    @if (!string.IsNullOrWhiteSpace(row.ProductSku))
+                                    {
+                                        <div class="page-subtitle">@row.ProductSku</div>
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="Message" Title="Details" />
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="StoreName" Title="Store" Width="210px" />
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="Value" Title="Value" Width="120px" TextAlign="TextAlign.End">
+                                <Template Context="row">@(row.Value is null ? "-" : row.Value.Value.ToString("N2"))</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="Threshold" Title="Threshold" Width="120px" TextAlign="TextAlign.End">
+                                <Template Context="row">@(row.Threshold is null ? "-" : row.Threshold.Value.ToString("N2"))</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Property="CreatedOnUtc" Title="Date" Width="155px">
+                                <Template Context="row">@row.CreatedOnUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="SmartAlertDto" Title="Action" Width="140px" Filterable="false" Sortable="false">
+                                <Template Context="row">
+                                    @if (!string.IsNullOrWhiteSpace(row.ActionUrl))
+                                    {
+                                        <RadzenButton Text="@(row.ActionText ?? "Open")" Icon="open_in_new" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => Go(row.ActionUrl!))" />
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Breakdown">
+                <div class="kpi-grid" style="margin-bottom:1rem">
+                    <div class="kpi-card"><div class="kpi-label">Pricing</div><div class="kpi-value" style="font-size:1.25rem">@_model.Summary.PricingAlerts</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Sales/discounts/returns</div><div class="kpi-value" style="font-size:1.25rem">@_model.Summary.SalesAlerts</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Transfers</div><div class="kpi-value" style="font-size:1.25rem">@_model.Summary.TransferAlerts</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Dead stock</div><div class="kpi-value" style="font-size:1.25rem">@_model.Summary.DeadStockAlerts</div></div>
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem">
+                    <RadzenCard class="content-card grid-card">
+                        <h3 style="margin-top:0">By severity</h3>
+                        <RadzenDataGrid Data="@_model.SeverityBreakdown" TItem="AlertBreakdownDto" AllowPaging="false" Density="Density.Compact">
+                            <Columns>
+                                <RadzenDataGridColumn TItem="AlertBreakdownDto" Property="Name" Title="Severity" />
+                                <RadzenDataGridColumn TItem="AlertBreakdownDto" Property="Count" Title="Count" TextAlign="TextAlign.End" />
+                            </Columns>
+                        </RadzenDataGrid>
+                    </RadzenCard>
+                    <RadzenCard class="content-card grid-card">
+                        <h3 style="margin-top:0">By type</h3>
+                        <RadzenDataGrid Data="@_model.TypeBreakdown" TItem="AlertBreakdownDto" AllowPaging="false" Density="Density.Compact">
+                            <Columns>
+                                <RadzenDataGridColumn TItem="AlertBreakdownDto" Property="Name" Title="Type" />
+                                <RadzenDataGridColumn TItem="AlertBreakdownDto" Property="Count" Title="Count" TextAlign="TextAlign.End" />
+                            </Columns>
+                        </RadzenDataGrid>
+                    </RadzenCard>
+                </div>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+}
+
+@code {
+    private SmartAlertsPageDto? _model;
+    private bool _loading;
+    private Guid? _storeId;
+    private DateTime? _from = DateTime.Today.AddDays(-7);
+    private DateTime? _to = DateTime.Today.AddDays(1);
+    private string _severity = "All";
+    private string _type = "All";
+    private bool _includeInfo = true;
+
+    private readonly string[] _severityOptions = ["All", "Critical", "Warning", "Info"];
+    private readonly string[] _typeOptions = ["All", "Stock", "Pricing", "Discount", "Sales", "Returns", "Cash", "Shift", "Transfer", "Dead Stock"];
+    private List<StoreOption> _storeOptions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var stores = await StoreService.GetAllAsync(false);
+        _storeOptions = [new StoreOption(null, "All stores")];
+        _storeOptions.AddRange(stores.Select(s => new StoreOption(s.Id, $"{s.Code} · {s.Name}")));
+        if (StoreContext.StoreId is { } selectedStore && stores.Any(s => s.Id == selectedStore))
+        {
+            _storeId = selectedStore;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _model = await AlertService.GetAlertsAsync(new SmartAlertQueryDto
+            {
+                StoreId = _storeId,
+                FromUtc = _from?.Date,
+                ToUtc = _to?.Date.AddDays(1),
+                Severity = _severity,
+                Type = _type,
+                IncludeInfo = _includeInfo
+            });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static BadgeStyle AlertSeverityStyle(string severity) => severity switch
+    {
+        "Critical" => BadgeStyle.Danger,
+        "Warning" => BadgeStyle.Warning,
+        "Info" => BadgeStyle.Info,
+        _ => BadgeStyle.Light
+    };
+
+    private void Go(string url) => Nav.NavigateTo(url);
+
+    private sealed record StoreOption(Guid? Value, string Text);
+}

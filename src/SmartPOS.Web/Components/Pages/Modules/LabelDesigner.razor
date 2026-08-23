@@ -1,0 +1,263 @@
+@page "/labels"
+@attribute [Authorize(Policy = Permissions.Catalog.LabelsView)]
+@inject IProductService ProductService
+@inject IStoreContext StoreContext
+@inject NotificationService Notifications
+@inject IJSRuntime Js
+
+<PageTitle>Barcode & Shelf Labels · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Barcode &amp; Shelf Label Designer</h1>
+        <p class="page-subtitle">Create product barcode labels, shelf price tags, and receiving labels without leaving SmartPOS.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenButton Icon="refresh" Text="Load Products" ButtonStyle="ButtonStyle.Light" Click="@LoadProductsAsync" />
+        <RadzenButton Icon="print" Text="Print Labels" ButtonStyle="ButtonStyle.Primary" Click="@PrintLabelsAsync" Disabled="@(!_selected.Any())" />
+    </div>
+</div>
+
+<div class="sp-label-layout">
+    <RadzenCard class="content-card sp-label-controls">
+        <h3>Label setup</h3>
+        <div class="form-grid two">
+            <label>
+                <span>Label type</span>
+                <RadzenDropDown @bind-Value="_settings.LabelType" Data="@_labelTypes" Style="width:100%" />
+            </label>
+            <label>
+                <span>Size</span>
+                <RadzenDropDown @bind-Value="_settings.Size" Data="@_sizes" TextProperty="Text" ValueProperty="Value" Style="width:100%" />
+            </label>
+            <label>
+                <span>Default copies</span>
+                <RadzenNumeric TValue="int" @bind-Value="_settings.DefaultCopies" Style="width:100%" />
+            </label>
+            <label>
+                <span>Custom note</span>
+                <RadzenTextBox @bind-Value="_settings.Note" Placeholder="e.g. New price / Sale" Style="width:100%" />
+            </label>
+        </div>
+
+        <div class="sp-label-options">
+            <RadzenCheckBox @bind-Value="_settings.ShowBarcode" /> <span>Show barcode</span>
+            <RadzenCheckBox @bind-Value="_settings.ShowPrice" /> <span>Show price</span>
+            <RadzenCheckBox @bind-Value="_settings.ShowSku" /> <span>Show SKU</span>
+            <RadzenCheckBox @bind-Value="_settings.ShowProductName" /> <span>Show product name</span>
+        </div>
+
+        <RadzenAlert Severity="AlertSeverity.Info" Variant="Variant.Flat" Style="margin-top:1rem">
+            Tip: for shelf labels, hide barcode and keep product name + price. For product stickers, keep barcode + SKU visible.
+        </RadzenAlert>
+    </RadzenCard>
+
+    <RadzenCard class="content-card sp-label-products">
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.Center" Style="margin-bottom:0.75rem">
+            <RadzenTextBox @bind-Value="_search" Placeholder="Search product, SKU, barcode…" Style="width:320px" @onkeydown="@SearchKeyDown" />
+            <RadzenButton Icon="search" Text="Search" ButtonStyle="ButtonStyle.Light" Click="@LoadProductsAsync" />
+            <span class="muted-text">@_products.Count product(s)</span>
+        </RadzenStack>
+
+        <RadzenDataGrid Data="@_products" TItem="ProductListItemDto" AllowPaging="true" PageSize="8" AllowSorting="true" EmptyText="No products found.">
+            <Columns>
+                <RadzenDataGridColumn TItem="ProductListItemDto" Property="Name" Title="Product">
+                    <Template Context="p">
+                        <strong>@p.Name</strong><br />
+                        <small>@p.Sku@(string.IsNullOrWhiteSpace(p.Barcode) ? string.Empty : $" · {p.Barcode}")</small>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ProductListItemDto" Property="CategoryName" Title="Category" Width="130px" />
+                <RadzenDataGridColumn TItem="ProductListItemDto" Property="BrandName" Title="Brand" Width="130px" />
+                <RadzenDataGridColumn TItem="ProductListItemDto" Property="SellPrice" Title="Price" Width="110px" TextAlign="TextAlign.End">
+                    <Template Context="p"><strong>@p.SellPrice.ToString("C2")</strong></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ProductListItemDto" Title="" Width="110px" TextAlign="TextAlign.End">
+                    <Template Context="p">
+                        <RadzenButton Icon="add" Text="Add" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Primary" Click="@(() => AddProduct(p))" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenCard>
+</div>
+
+<RadzenCard class="content-card" Style="margin-top:1rem">
+    <div class="sp-label-selected-head">
+        <div>
+            <h3>Selected labels</h3>
+            <p class="muted-text">@_selected.Sum(x => x.Copies) label(s) ready to print.</p>
+        </div>
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+            <RadzenButton Icon="delete_sweep" Text="Clear" ButtonStyle="ButtonStyle.Light" Click="@(() => _selected.Clear())" Disabled="@(!_selected.Any())" />
+            <RadzenButton Icon="visibility" Text="Refresh Preview" ButtonStyle="ButtonStyle.Light" Click="@RenderBarcodesAsync" Disabled="@(!_selected.Any())" />
+        </RadzenStack>
+    </div>
+
+    @if (!_selected.Any())
+    {
+        <div class="empty-state small">Add products from the list above to preview labels.</div>
+    }
+    else
+    {
+        <RadzenDataGrid Data="@_selected" TItem="SelectedLabelLine" AllowPaging="false" Style="margin-bottom:1rem">
+            <Columns>
+                <RadzenDataGridColumn TItem="SelectedLabelLine" Property="Name" Title="Product">
+                    <Template Context="l"><strong>@l.Name</strong><br /><small>@l.Sku · @(string.IsNullOrWhiteSpace(l.Barcode) ? "No barcode" : l.Barcode)</small></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SelectedLabelLine" Property="Price" Title="Price" Width="120px" TextAlign="TextAlign.End">
+                    <Template Context="l">@l.Price.ToString("C2")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SelectedLabelLine" Property="Copies" Title="Copies" Width="120px">
+                    <Template Context="l"><RadzenNumeric TValue="int" @bind-Value="l.Copies" Style="width:90px" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="SelectedLabelLine" Title="" Width="80px" TextAlign="TextAlign.End">
+                    <Template Context="l"><RadzenButton Icon="close" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => RemoveLine(l))" /></Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+
+        <div id="labelPrintArea" class="sp-label-sheet @_settings.Size">
+            @foreach (var line in ExpandedLabels)
+            {
+                <div class="sp-product-label @_settings.LabelType.ToLowerInvariant()">
+                    @if (_settings.ShowProductName)
+                    {
+                        <div class="sp-label-name">@line.Name</div>
+                    }
+                    @if (_settings.ShowSku)
+                    {
+                        <div class="sp-label-sku">@line.Sku</div>
+                    }
+                    @if (_settings.ShowBarcode)
+                    {
+                        <svg class="sp-label-barcode" data-barcode="@(string.IsNullOrWhiteSpace(line.Barcode) ? line.Sku : line.Barcode)"></svg>
+                        <div class="sp-label-barcode-text">@(string.IsNullOrWhiteSpace(line.Barcode) ? line.Sku : line.Barcode)</div>
+                    }
+                    @if (_settings.ShowPrice)
+                    {
+                        <div class="sp-label-price">@line.Price.ToString("C2")</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_settings.Note))
+                    {
+                        <div class="sp-label-note">@_settings.Note</div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</RadzenCard>
+
+@code {
+    private List<ProductListItemDto> _products = [];
+    private List<SelectedLabelLine> _selected = [];
+    private string? _search;
+    private LabelSettings _settings = new();
+
+    private readonly string[] _labelTypes = ["Product", "Shelf", "Price"];
+    private readonly List<OptionItem> _sizes =
+    [
+        new("small-labels", "40 × 30 mm"),
+        new("medium-labels", "50 × 35 mm"),
+        new("shelf-labels", "80 × 40 mm"),
+        new("a4-price-tags", "A4 price tags")
+    ];
+
+    private IEnumerable<SelectedLabelLine> ExpandedLabels => _selected
+        .Where(x => x.Copies > 0)
+        .SelectMany(x => Enumerable.Repeat(x, Math.Clamp(x.Copies, 1, 500)));
+
+    protected override async Task OnInitializedAsync() => await LoadProductsAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_selected.Any())
+        {
+            await RenderBarcodesAsync();
+        }
+    }
+
+    private async Task SearchKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+        {
+            await LoadProductsAsync();
+        }
+    }
+
+    private async Task LoadProductsAsync()
+    {
+        if (StoreContext.StoreId is not { } storeId)
+        {
+            _products = [];
+            return;
+        }
+
+        _products = (await ProductService.GetAllAsync(_search, storeId, assignedOnly: true))
+            .Where(p => p.IsActive)
+            .Take(200)
+            .ToList();
+    }
+
+    private void AddProduct(ProductListItemDto product)
+    {
+        var existing = _selected.FirstOrDefault(x => x.ProductId == product.Id);
+        if (existing is not null)
+        {
+            existing.Copies += Math.Max(1, _settings.DefaultCopies);
+            return;
+        }
+
+        _selected.Add(new SelectedLabelLine
+        {
+            ProductId = product.Id,
+            Sku = product.Sku,
+            Name = product.Name,
+            Barcode = product.Barcode,
+            Price = product.SellPrice,
+            Copies = Math.Max(1, _settings.DefaultCopies)
+        });
+    }
+
+    private void RemoveLine(SelectedLabelLine line) => _selected.Remove(line);
+
+    private async Task RenderBarcodesAsync()
+    {
+        await Js.InvokeVoidAsync("smartPosLabels.renderAll");
+    }
+
+    private async Task PrintLabelsAsync()
+    {
+        if (!_selected.Any())
+        {
+            Notifications.Notify(new NotificationMessage { Severity = NotificationSeverity.Warning, Summary = "No labels", Detail = "Add at least one product label first.", Duration = 3000 });
+            return;
+        }
+
+        await Js.InvokeVoidAsync("smartPosLabels.print", "labelPrintArea", "Product Labels");
+    }
+
+    private sealed record OptionItem(string Value, string Text);
+
+    private sealed class LabelSettings
+    {
+        public string LabelType { get; set; } = "Product";
+        public string Size { get; set; } = "small-labels";
+        public int DefaultCopies { get; set; } = 1;
+        public bool ShowBarcode { get; set; } = true;
+        public bool ShowPrice { get; set; } = true;
+        public bool ShowSku { get; set; } = true;
+        public bool ShowProductName { get; set; } = true;
+        public string? Note { get; set; }
+    }
+
+    private sealed class SelectedLabelLine
+    {
+        public Guid ProductId { get; set; }
+        public string Sku { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string? Barcode { get; set; }
+        public decimal Price { get; set; }
+        public int Copies { get; set; } = 1;
+    }
+}

@@ -1,0 +1,58 @@
+@page "/login"
+@layout BlankLayout
+@attribute [AllowAnonymous]
+
+<PageTitle>Sign In · EMAL</PageTitle>
+
+<div class="emal-login-page">
+    <main class="emal-login-card">
+        <div class="emal-login-logo" aria-label="EMAL">EMAL</div>
+
+        @if (HasError)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" Shade="Shade.Lighter"
+                         AllowClose="false" Style="margin-bottom:1.25rem;border-radius:10px;font-size:0.86rem">
+                @ErrorMessage
+            </RadzenAlert>
+        }
+
+        <form method="post" action="/auth/login" class="emal-login-form">
+            <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+
+            <div class="emal-login-field">
+                <label for="emal-login-email">Email</label>
+                <input id="emal-login-email"
+                       type="email"
+                       name="email"
+                       required
+                       autofocus
+                       autocomplete="username"
+                       placeholder="Email address" />
+            </div>
+
+            <div class="emal-login-field">
+                <label for="emal-login-password">Password</label>
+                <input id="emal-login-password"
+                       type="password"
+                       name="password"
+                       required
+                       autocomplete="current-password"
+                       placeholder="Password" />
+            </div>
+
+            <button type="submit" class="emal-login-button">Sign in</button>
+        </form>
+    </main>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "error")] public string? Error { get; set; }
+    [SupplyParameterFromQuery(Name = "returnUrl")] public string? ReturnUrl { get; set; }
+
+    private bool HasError => !string.IsNullOrEmpty(Error);
+    private string ErrorMessage => Error switch
+    {
+        "locked" => "Your account is locked. Please contact your administrator.",
+        _ => "Invalid email or password. Please try again."
+    };
+}

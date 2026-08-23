@@ -1,0 +1,141 @@
+@page "/setup/shortcuts"
+@attribute [Authorize(Policy = Permissions.Setup.ShortcutsView)]
+@inject IPosShortcutService ShortcutService
+@inject NotificationService Notifications
+@inject DialogService DialogService
+
+<PageTitle>POS Shortcuts · SmartPOS</PageTitle>
+
+<section class="content-shell">
+    <div class="module-header">
+        <div>
+            <p class="eyebrow">Setup</p>
+            <h1>POS Shortcut Keys</h1>
+            <p>Configure cashier keyboard shortcuts used on the POS counter screen.</p>
+        </div>
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+            <AuthorizeView Policy="@Permissions.Setup.ShortcutsManage">
+                <Authorized>
+                    <RadzenButton Text="Reset defaults" Icon="restart_alt" ButtonStyle="ButtonStyle.Light" Click="@ResetAsync" />
+                    <RadzenButton Text="Save shortcuts" Icon="save" ButtonStyle="ButtonStyle.Primary" Click="@SaveAsync" />
+                </Authorized>
+            </AuthorizeView>
+        </RadzenStack>
+    </div>
+
+    <div class="report-card">
+        <RadzenDataGrid Data="@_shortcuts" TItem="PosShortcutSettingDto" AllowPaging="false" AllowSorting="false" Class="shortcut-grid">
+            <Columns>
+                <RadzenDataGridColumn TItem="PosShortcutSettingDto" Property="ActionName" Title="Action" Width="260px" />
+                <RadzenDataGridColumn TItem="PosShortcutSettingDto" Title="Key" Width="150px">
+                    <Template Context="row">
+                        <RadzenTextBox @bind-Value="row.Key" Style="width:100%" Disabled="@(!_canManage)" />
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="PosShortcutSettingDto" Title="Ctrl" Width="80px">
+                    <Template Context="row"><RadzenCheckBox @bind-Value="row.Ctrl" Disabled="@(!_canManage)" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="PosShortcutSettingDto" Title="Alt" Width="80px">
+                    <Template Context="row"><RadzenCheckBox @bind-Value="row.Alt" Disabled="@(!_canManage)" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="PosShortcutSettingDto" Title="Shift" Width="80px">
+                    <Template Context="row"><RadzenCheckBox @bind-Value="row.Shift" Disabled="@(!_canManage)" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="PosShortcutSettingDto" Title="Enabled" Width="100px">
+                    <Template Context="row"><RadzenCheckBox @bind-Value="row.IsEnabled" Disabled="@(!_canManage)" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="PosShortcutSettingDto" Title="Preview" Width="180px">
+                    <Template Context="row">
+                        <span class="shortcut-preview">@Preview(row)</span>
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </div>
+</section>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
+
+    private List<PosShortcutSettingDto> _shortcuts = [];
+    private bool _canManage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _shortcuts = (await ShortcutService.GetAsync()).ToList();
+        if (AuthenticationStateTask is not null)
+        {
+            var authState = await AuthenticationStateTask;
+            _canManage = authState.User.HasClaim(Permissions.ClaimType, Permissions.Setup.ShortcutsManage);
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        var result = await ShortcutService.SaveAsync(_shortcuts.Select(s => new UpdatePosShortcutDto
+        {
+            ActionCode = s.ActionCode,
+            Key = s.Key,
+            Ctrl = s.Ctrl,
+            Alt = s.Alt,
+            Shift = s.Shift,
+            IsEnabled = s.IsEnabled
+        }).ToList());
+
+        if (!result.Succeeded)
+        {
+            Notify(NotificationSeverity.Warning, "Shortcuts not saved", result.Error ?? "Please fix validation errors.");
+            return;
+        }
+
+        _shortcuts = (await ShortcutService.GetAsync()).ToList();
+        Notify(NotificationSeverity.Success, "Shortcuts saved", "Open POS again to use the latest mapping.");
+    }
+
+    private async Task ResetAsync()
+    {
+        var confirmed = await DialogService.Confirm(
+            "Reset all POS shortcut keys to the system defaults?",
+            "Reset shortcuts",
+            new ConfirmOptions { OkButtonText = "Reset", CancelButtonText = "Cancel" });
+
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        var result = await ShortcutService.ResetDefaultsAsync();
+        if (!result.Succeeded)
+        {
+            Notify(NotificationSeverity.Warning, "Reset failed", result.Error ?? "Could not reset shortcuts.");
+            return;
+        }
+
+        _shortcuts = (await ShortcutService.GetAsync()).ToList();
+        Notify(NotificationSeverity.Success, "Defaults restored", "Shortcut keys have been reset.");
+    }
+
+    private static string Preview(PosShortcutSettingDto row)
+    {
+        if (!row.IsEnabled)
+        {
+            return "Disabled";
+        }
+
+        var parts = new List<string>();
+        if (row.Ctrl) parts.Add("Ctrl");
+        if (row.Alt) parts.Add("Alt");
+        if (row.Shift) parts.Add("Shift");
+        parts.Add((row.Key ?? string.Empty).Trim());
+        return string.Join(" + ", parts.Where(x => !string.IsNullOrWhiteSpace(x)));
+    }
+
+    private void Notify(NotificationSeverity severity, string summary, string detail) =>
+        Notifications.Notify(new NotificationMessage
+        {
+            Severity = severity,
+            Summary = summary,
+            Detail = detail,
+            Duration = 3500
+        });
+}

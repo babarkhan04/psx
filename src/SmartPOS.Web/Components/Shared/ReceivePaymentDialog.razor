@@ -1,0 +1,73 @@
+@inject ICustomerService CustomerService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="ReceivePaymentDto" Data="@Model" Submit="@OnSubmit">
+    <DataAnnotationsValidator />
+    <RadzenStack Gap="1rem">
+        <div class="receive-payment-summary">
+            <div><span>Customer</span><strong>@CustomerName</strong></div>
+            <div><span>Outstanding udhaar</span><strong>@CurrentBalance.ToString("C2")</strong></div>
+        </div>
+
+        <RadzenFormField Text="Amount received (Rs)" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenNumeric @bind-Value="Model.Amount" Min="0" Name="Amount" />
+        </RadzenFormField>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Reference (optional)" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Reference" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Notes (optional)" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Notes" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="payments" Text="Receive payment" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public Guid CustomerId { get; set; }
+    [Parameter] public string CustomerName { get; set; } = string.Empty;
+    [Parameter] public decimal CurrentBalance { get; set; }
+
+    private ReceivePaymentDto Model = new();
+    private bool _saving;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        Model.CustomerId = CustomerId;
+        Model.Amount = CurrentBalance;
+    }
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+
+        var result = await CustomerService.ReceivePaymentAsync(Model);
+
+        _saving = false;
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

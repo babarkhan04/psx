@@ -1,0 +1,95 @@
+@inject IRegisterService RegisterService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="RegisterDto" Data="@Model" Submit="@OnSubmit">
+    <DataAnnotationsValidator />
+    <RadzenStack Gap="1rem">
+        <RadzenFormField Text="Store" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenDropDown @bind-Value="Model.StoreId" Data="@Stores" TextProperty="Name" ValueProperty="Id"
+                            Placeholder="Select a store" Name="StoreId" />
+        </RadzenFormField>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Code" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Code" Name="Code" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Code" Text="Code is required" Popup="true" />
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="8">
+                <RadzenFormField Text="Register name" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Name" Name="Name" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Name" Text="Name is required" Popup="true" />
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Location" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Location" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Printer name" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.PrinterName" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="1.5rem">
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenCheckBox @bind-Value="Model.HasCashDrawer" Name="HasCashDrawer" />
+                <RadzenLabel Text="Has cash drawer" Component="HasCashDrawer" />
+            </RadzenStack>
+            <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                <RadzenCheckBox @bind-Value="Model.IsActive" Name="IsActive" />
+                <RadzenLabel Text="Active" Component="IsActive" />
+            </RadzenStack>
+        </RadzenStack>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Save" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public RegisterDto Model { get; set; } = new();
+    [Parameter] public IReadOnlyList<StoreDto> Stores { get; set; } = [];
+
+    private bool _saving;
+    private string? _error;
+
+    private async Task OnSubmit()
+    {
+        if (Model.StoreId == Guid.Empty)
+        {
+            _error = "Please select a store.";
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+
+        Result result = Model.Id == Guid.Empty
+            ? await RegisterService.CreateAsync(Model)
+            : await RegisterService.UpdateAsync(Model);
+
+        _saving = false;
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

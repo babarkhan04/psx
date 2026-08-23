@@ -1,0 +1,334 @@
+@inject IProductService ProductService
+@inject DialogService DialogService
+@inject IWebHostEnvironment Env
+
+<RadzenTemplateForm TItem="ProductDto" Data="@Model" Submit="@OnSubmit">
+    <DataAnnotationsValidator />
+    <RadzenTabs RenderMode="TabRenderMode.Client">
+        <Tabs>
+            <RadzenTabsItem Text="Details" Icon="inventory_2">
+                <RadzenStack Gap="1rem" class="dialog-section">
+                    <RadzenRow Gap="1rem">
+                        <RadzenColumn Size="12" SizeMD="4">
+                            <RadzenFormField Text="SKU" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenTextBox @bind-Value="Model.Sku" Name="Sku" />
+                            </RadzenFormField>
+                            <RadzenRequiredValidator Component="Sku" Text="SKU is required" Popup="true" />
+                        </RadzenColumn>
+                        <RadzenColumn Size="12" SizeMD="8">
+                            <RadzenFormField Text="Product name" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenTextBox @bind-Value="Model.Name" Name="Name" />
+                            </RadzenFormField>
+                            <RadzenRequiredValidator Component="Name" Text="Name is required" Popup="true" />
+                        </RadzenColumn>
+                    </RadzenRow>
+
+                    <RadzenFormField Text="Description" Variant="Variant.Outlined" Style="width:100%">
+                        <RadzenTextArea @bind-Value="Model.Description" Rows="2" />
+                    </RadzenFormField>
+
+                    <RadzenRow Gap="1rem">
+                        <RadzenColumn Size="12" SizeMD="6">
+                            <RadzenFormField Text="Category" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenDropDown @bind-Value="Model.CategoryId" Data="@Categories" TextProperty="Name" ValueProperty="Id"
+                                                AllowClear="true" Placeholder="Unassigned" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12" SizeMD="6">
+                            <RadzenFormField Text="Brand" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenDropDown @bind-Value="Model.BrandId" Data="@Brands" TextProperty="Name" ValueProperty="Id"
+                                                AllowClear="true" Placeholder="Unassigned" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                    </RadzenRow>
+
+                    <RadzenRow Gap="1rem">
+                        <RadzenColumn Size="12" SizeMD="6">
+                            <RadzenFormField Text="Unit of measure" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenDropDown @bind-Value="Model.UnitId" Data="@Units" TextProperty="Name" ValueProperty="Id"
+                                                AllowClear="true" Placeholder="Unassigned" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12" SizeMD="6">
+                            <RadzenFormField Text="Product image" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenStack Gap="0.75rem">
+                                    @if (!string.IsNullOrWhiteSpace(Model.ImageUrl))
+                                    {
+                                        <img src="@Model.ImageUrl" alt="Product" class="product-thumb" />
+                                    }
+                                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.Center">
+                                        <InputFile OnChange="OnImageSelected" accept="image/*" class="file-input" />
+                                        @if (_uploadingImage)
+                                        {
+                                            <RadzenText TextStyle="TextStyle.Caption">Uploading…</RadzenText>
+                                        }
+                                    </RadzenStack>
+                                    <RadzenTextBox @bind-Value="Model.ImageUrl" Placeholder="Or paste image URL" Style="width:100%" />
+                                </RadzenStack>
+                            </RadzenFormField>
+                        </RadzenColumn>
+                    </RadzenRow>
+
+                    <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+                        <RadzenCheckBox @bind-Value="Model.IsActive" Name="IsActive" />
+                        <RadzenLabel Text="Active (available for sale)" Component="IsActive" />
+                    </RadzenStack>
+                </RadzenStack>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Pricing & Tax" Icon="payments">
+                <RadzenStack Gap="1rem" class="dialog-section">
+                    <RadzenRow Gap="1rem">
+                        <RadzenColumn Size="12" SizeMD="4">
+                            <RadzenFormField Text="Cost price" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenNumeric @bind-Value="Model.CostPrice" Min="0" Format="0.00" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12" SizeMD="4">
+                            <RadzenFormField Text="Default sell price" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenNumeric @bind-Value="Model.SellPrice" Min="0" Format="0.00" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                        <RadzenColumn Size="12" SizeMD="4">
+                            <RadzenFormField Text="Reorder level" Variant="Variant.Outlined" Style="width:100%">
+                                <RadzenNumeric @bind-Value="Model.ReorderLevel" Min="0" Format="0.###" />
+                            </RadzenFormField>
+                        </RadzenColumn>
+                    </RadzenRow>
+
+                    <RadzenFormField Text="Tax category" Variant="Variant.Outlined" Style="width:100%">
+                        <RadzenDropDown @bind-Value="Model.TaxCategoryId" Data="@Taxes" TextProperty="Name" ValueProperty="Id"
+                                        AllowClear="true" Placeholder="No tax" />
+                    </RadzenFormField>
+
+                    @if (Model.SellPrice > 0 && Model.CostPrice >= 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" Style="color:var(--sp-text-muted)">
+                            Margin: @Margin().ToString("0.0")% &nbsp;·&nbsp; Markup: @(Model.CostPrice > 0 ? ((Model.SellPrice - Model.CostPrice) / Model.CostPrice * 100).ToString("0.0") : "—")%
+                        </RadzenText>
+                    }
+                </RadzenStack>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Barcodes" Icon="qr_code_2">
+                <RadzenStack Gap="1rem" class="dialog-section">
+                    <RadzenFormField Text="Primary barcode" Variant="Variant.Outlined" Style="width:100%">
+                        <RadzenTextBox @bind-Value="Model.Barcode" />
+                    </RadzenFormField>
+
+                    <RadzenText TextStyle="TextStyle.Subtitle2">Additional barcodes</RadzenText>
+                    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" AlignItems="AlignItems.Center">
+                        <RadzenTextBox @bind-Value="_newBarcode" Placeholder="Scan or type a barcode" Style="flex:1" />
+                        <RadzenButton Icon="add" Text="Add" Click="@AddBarcode" Disabled="@string.IsNullOrWhiteSpace(_newBarcode)" />
+                    </RadzenStack>
+
+                    @if (Model.AdditionalBarcodes.Count == 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" Style="color:var(--sp-text-muted)">No additional barcodes.</RadzenText>
+                    }
+                    else
+                    {
+                        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+                            @foreach (var bc in Model.AdditionalBarcodes.ToList())
+                            {
+                                <RadzenBadge BadgeStyle="BadgeStyle.Base" Style="display:inline-flex;align-items:center;gap:0.35rem">
+                                    @bc
+                                    <RadzenButton Icon="close" Size="ButtonSize.ExtraSmall" ButtonStyle="ButtonStyle.Light"
+                                                  Click="@(() => Model.AdditionalBarcodes.Remove(bc))" />
+                                </RadzenBadge>
+                            }
+                        </RadzenStack>
+                    }
+                </RadzenStack>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Variants" Icon="style">
+                <RadzenStack Gap="1rem" class="dialog-section">
+                    <RadzenText TextStyle="TextStyle.Caption" Style="color:var(--sp-text-muted)">
+                        Optional sellable variants (size, color, pack). Each variant has its own SKU and optional barcode/price.
+                    </RadzenText>
+                    <RadzenButton Icon="add" Text="Add variant" Size="ButtonSize.Small" Click="@AddVariant" />
+                    @if (Model.Variants.Count == 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption">No variants — base product SKU is used.</RadzenText>
+                    }
+                    else
+                    {
+                        <RadzenDataGrid Data="@Model.Variants" TItem="ProductVariantDto" AllowPaging="false">
+                            <Columns>
+                                <RadzenDataGridColumn TItem="ProductVariantDto" Property="Sku" Title="SKU" Width="130px">
+                                    <Template Context="v">
+                                        <RadzenTextBox @bind-Value="v.Sku" Style="width:100%" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn TItem="ProductVariantDto" Property="Name" Title="Name">
+                                    <Template Context="v">
+                                        <RadzenTextBox @bind-Value="v.Name" Style="width:100%" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn TItem="ProductVariantDto" Property="Barcode" Title="Barcode" Width="130px">
+                                    <Template Context="v">
+                                        <RadzenTextBox @bind-Value="v.Barcode" Style="width:100%" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn TItem="ProductVariantDto" Property="SellPrice" Title="Sell" Width="100px">
+                                    <Template Context="v">
+                                        <RadzenNumeric @bind-Value="v.SellPrice" Min="0" Format="0.00" Style="width:100%" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                                <RadzenDataGridColumn TItem="ProductVariantDto" Title="" Width="60px" TextAlign="TextAlign.End">
+                                    <Template Context="v">
+                                        <RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                                      Click="@(() => Model.Variants.Remove(v))" />
+                                    </Template>
+                                </RadzenDataGridColumn>
+                            </Columns>
+                        </RadzenDataGrid>
+                    }
+                </RadzenStack>
+            </RadzenTabsItem>
+
+
+            <RadzenTabsItem Text="Store visibility" Icon="storefront">
+                <RadzenStack Gap="0.75rem" class="dialog-section">
+                    <RadzenText TextStyle="TextStyle.Caption" Style="color:var(--sp-text-muted)">
+                        Select the stores where this product should appear in POS. Products not selected here remain hidden from that store's POS catalog.
+                    </RadzenText>
+                    @if (Model.StoreAssignments.Count == 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption">No active stores.</RadzenText>
+                    }
+                    else
+                    {
+                        @foreach (var assignment in Model.StoreAssignments)
+                        {
+                            <RadzenStack Orientation="Orientation.Horizontal" Gap="0.65rem" AlignItems="AlignItems.Center">
+                                <RadzenCheckBox @bind-Value="assignment.IsVisibleOnPos" Name="@($"store-{assignment.StoreId}")" />
+                                <RadzenLabel Text="@assignment.StoreName" Component="@($"store-{assignment.StoreId}")" />
+                            </RadzenStack>
+                        }
+                    }
+                </RadzenStack>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Store prices" Icon="storefront">
+                <RadzenStack Gap="0.75rem" class="dialog-section">
+                    <RadzenText TextStyle="TextStyle.Caption" Style="color:var(--sp-text-muted)">
+                        Leave blank to use the default sell price for that store.
+                    </RadzenText>
+                    @if (Model.StorePrices.Count == 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption">No active stores.</RadzenText>
+                    }
+                    else
+                    {
+                        @foreach (var sp in Model.StorePrices)
+                        {
+                            <RadzenRow Gap="1rem" AlignItems="AlignItems.Center">
+                                <RadzenColumn Size="7"><RadzenText>@sp.StoreName</RadzenText></RadzenColumn>
+                                <RadzenColumn Size="5">
+                                    <RadzenNumeric @bind-Value="sp.Price" Min="0" Format="0.00" Placeholder="Default" Style="width:100%" />
+                                </RadzenColumn>
+                            </RadzenRow>
+                        }
+                    }
+                </RadzenStack>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+
+    @if (_error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false" Style="margin-top:0.75rem">@_error</RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem" Style="margin-top:1rem">
+        <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+        <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Save product" IsBusy="@_saving" Disabled="@_saving" />
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public ProductDto Model { get; set; } = new();
+    [Parameter] public IReadOnlyList<LookupDto> Categories { get; set; } = [];
+    [Parameter] public IReadOnlyList<LookupDto> Brands { get; set; } = [];
+    [Parameter] public IReadOnlyList<LookupDto> Units { get; set; } = [];
+    [Parameter] public IReadOnlyList<LookupDto> Taxes { get; set; } = [];
+
+    private string? _newBarcode;
+    private bool _saving;
+    private bool _uploadingImage;
+    private string? _error;
+
+    private decimal Margin() => Model.SellPrice <= 0 ? 0 : (Model.SellPrice - Model.CostPrice) / Model.SellPrice * 100;
+
+    private void AddVariant() =>
+        Model.Variants.Add(new ProductVariantDto { IsActive = true });
+
+    private async Task OnImageSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" && ext != ".gif")
+        {
+            _error = "Only JPG, PNG, WebP, or GIF images are allowed.";
+            return;
+        }
+
+        _uploadingImage = true;
+        try
+        {
+            var folder = Path.Combine(Env.WebRootPath, "uploads", "products");
+            Directory.CreateDirectory(folder);
+            var fileName = $"{Guid.NewGuid():N}{ext}";
+            var path = Path.Combine(folder, fileName);
+            await using var fs = File.Create(path);
+            await using var stream = file.OpenReadStream(5 * 1024 * 1024);
+            await stream.CopyToAsync(fs);
+            Model.ImageUrl = $"/uploads/products/{fileName}";
+        }
+        catch
+        {
+            _error = "Image upload failed.";
+        }
+        finally
+        {
+            _uploadingImage = false;
+        }
+    }
+
+    private void AddBarcode()
+    {
+        var code = _newBarcode?.Trim();
+        if (!string.IsNullOrWhiteSpace(code) && !Model.AdditionalBarcodes.Contains(code, StringComparer.OrdinalIgnoreCase))
+        {
+            Model.AdditionalBarcodes.Add(code);
+        }
+        _newBarcode = null;
+    }
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+
+        Result result = Model.Id == Guid.Empty
+            ? await ProductService.CreateAsync(Model)
+            : await ProductService.UpdateAsync(Model);
+
+        _saving = false;
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

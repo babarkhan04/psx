@@ -1,0 +1,123 @@
+@inject DialogService DialogService
+@inject IJSRuntime Js
+
+<div class="sp-a4-invoice-dialog">
+    <div id="a4InvoicePrintArea" class="sp-a4-invoice-page">
+        <div class="sp-a4-invoice-top">
+            <div>
+                <div class="sp-a4-brand">SmartPOS</div>
+                <div class="sp-a4-muted">Retail invoice</div>
+                <div class="sp-a4-muted">@Receipt.StoreName</div>
+            </div>
+            <div class="sp-a4-invoice-title">
+                <h2>INVOICE</h2>
+                <strong>@Receipt.SaleNumber</strong>
+                <span>@Receipt.CompletedOn.ToLocalTime().ToString("dd MMM yyyy · h:mm tt")</span>
+            </div>
+        </div>
+
+        <div class="sp-a4-info-grid">
+            <div class="sp-a4-info-box">
+                <span>Bill To</span>
+                <strong>@Receipt.CustomerName</strong>
+                <small>Customer invoice copy</small>
+            </div>
+            <div class="sp-a4-info-box">
+                <span>Store</span>
+                <strong>@Receipt.StoreName</strong>
+                <small>Register: @Receipt.RegisterName</small>
+            </div>
+            <div class="sp-a4-info-box">
+                <span>Cashier</span>
+                <strong>@(string.IsNullOrWhiteSpace(Receipt.CashierName) ? "System" : Receipt.CashierName)</strong>
+                <small>Payment: @Receipt.PaymentMethod</small>
+            </div>
+        </div>
+
+        <table class="sp-a4-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Item</th>
+                    <th>SKU</th>
+                    <th class="num">Qty</th>
+                    <th class="num">Rate</th>
+                    <th class="num">Discount</th>
+                    <th class="num">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                @for (var i = 0; i < Receipt.Lines.Count; i++)
+                {
+                    var line = Receipt.Lines[i];
+                    <tr>
+                        <td>@(i + 1)</td>
+                        <td>
+                            <strong>@line.Name</strong>
+                            @if (!string.IsNullOrWhiteSpace(line.DiscountReason))
+                            {
+                                <small>Discount reason: @line.DiscountReason</small>
+                            }
+                        </td>
+                        <td>@line.Sku</td>
+                        <td class="num">@line.Quantity.ToString("0.###")</td>
+                        <td class="num">@line.UnitPrice.ToString("C2")</td>
+                        <td class="num">@(line.DiscountAmount > 0 ? line.DiscountAmount.ToString("C2") : "-")</td>
+                        <td class="num"><strong>@line.LineTotal.ToString("C2")</strong></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <div class="sp-a4-bottom">
+            <div class="sp-a4-notes">
+                <strong>Payment details</strong>
+                @if (Receipt.Payments.Count == 0)
+                {
+                    <p>@Receipt.PaymentMethod · @Receipt.AmountPaid.ToString("C2")</p>
+                }
+                else
+                {
+                    @foreach (var payment in Receipt.Payments)
+                    {
+                        <p>@payment.Method@(string.IsNullOrWhiteSpace(payment.Reference) ? string.Empty : $" · {payment.Reference}") — @payment.Amount.ToString("C2")</p>
+                    }
+                }
+                <small>This is a system-generated invoice. Please keep it for returns, exchanges, and warranty reference where applicable.</small>
+            </div>
+            <div class="sp-a4-totals">
+                <div><span>Subtotal</span><strong>@Receipt.Subtotal.ToString("C2")</strong></div>
+                @if (Receipt.DiscountAmount > 0)
+                {
+                    <div><span>Invoice discount</span><strong>-@Receipt.DiscountAmount.ToString("C2")</strong></div>
+                }
+                <div><span>Tax</span><strong>@Receipt.TaxAmount.ToString("C2")</strong></div>
+                <div class="grand"><span>Total</span><strong>@Receipt.TotalAmount.ToString("C2")</strong></div>
+                <div><span>Paid</span><strong>@Receipt.AmountPaid.ToString("C2")</strong></div>
+                @if (Receipt.ChangeDue > 0)
+                {
+                    <div><span>Change</span><strong>@Receipt.ChangeDue.ToString("C2")</strong></div>
+                }
+            </div>
+        </div>
+
+        <div class="sp-a4-signatures">
+            <div><span>Customer Signature</span></div>
+            <div><span>Authorized Signature</span></div>
+        </div>
+    </div>
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End" Style="margin-top:1rem">
+        <RadzenButton Icon="print" Text="Print A4" ButtonStyle="ButtonStyle.Primary" Click="@(() => PrintAsync())" />
+        <RadzenButton Icon="close" Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(false))" />
+    </RadzenStack>
+</div>
+
+@code {
+    [Parameter] public PosReceiptDto Receipt { get; set; } = default!;
+
+    private async Task PrintAsync()
+    {
+        await Js.InvokeVoidAsync("smartPosInvoicePrint.printElement", "a4InvoicePrintArea", $"Invoice {Receipt.SaleNumber}");
+    }
+}

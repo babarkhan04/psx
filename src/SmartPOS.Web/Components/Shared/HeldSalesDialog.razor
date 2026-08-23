@@ -1,0 +1,120 @@
+@inject IPosService PosService
+@inject DialogService DialogService
+@inject NotificationService Notifications
+
+<RadzenStack Gap="1rem">
+    @if (_loading)
+    {
+        <div style="display:flex;align-items:center;justify-content:center;padding:2rem">
+            <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+        </div>
+    }
+    else if (_heldSales.Count == 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Info" ShowIcon="true" Variant="Variant.Flat">
+            No held sales found for this register.
+        </RadzenAlert>
+    }
+    else
+    {
+        <RadzenDataGrid Data="@_heldSales" TItem="HeldSaleListItemDto" AllowPaging="true" PageSize="8" AllowSorting="true" Density="Density.Compact">
+            <Columns>
+                <RadzenDataGridColumn TItem="HeldSaleListItemDto" Property="HeldNumber" Title="Held #" Width="170px" />
+                <RadzenDataGridColumn TItem="HeldSaleListItemDto" Property="HeldOn" Title="Held On" Width="150px" FormatString="{0:g}" />
+                <RadzenDataGridColumn TItem="HeldSaleListItemDto" Title="Expires" Width="140px">
+                    <Template Context="item">
+                        <span class="held-expiry-pill @GetExpiryClass(item)">@item.ExpiryText</span>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="HeldSaleListItemDto" Property="CustomerName" Title="Customer" />
+                <RadzenDataGridColumn TItem="HeldSaleListItemDto" Property="ItemCount" Title="Items" Width="80px" TextAlign="TextAlign.Right" />
+                <RadzenDataGridColumn TItem="HeldSaleListItemDto" Property="TotalAmount" Title="Total" Width="110px" TextAlign="TextAlign.Right" FormatString="{0:C2}" />
+                <RadzenDataGridColumn TItem="HeldSaleListItemDto" Title="Action" Width="170px" Sortable="false" Filterable="false">
+                    <Template Context="item">
+                        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.35rem" JustifyContent="JustifyContent.End">
+                            <RadzenButton Size="ButtonSize.Small" Icon="shopping_cart_checkout" Text="Open" ButtonStyle="ButtonStyle.Primary" Click="@(() => SelectAsync(item))" />
+                            <RadzenButton Size="ButtonSize.Small" Icon="close" ButtonStyle="ButtonStyle.Light" Click="@(() => CancelAsync(item))" />
+                        </RadzenStack>
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(null))" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public Guid StoreId { get; set; }
+    [Parameter] public Guid RegisterId { get; set; }
+
+    private List<HeldSaleListItemDto> _heldSales = [];
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _heldSales = (await PosService.GetHeldSalesAsync(StoreId, RegisterId)).ToList();
+        _loading = false;
+    }
+
+    private static string GetExpiryClass(HeldSaleListItemDto item)
+    {
+        if (item.ExpiresOn is null)
+        {
+            return string.Empty;
+        }
+
+        var minutes = item.MinutesRemaining.GetValueOrDefault();
+        return minutes <= 30 ? "danger" : minutes <= 120 ? "warn" : string.Empty;
+    }
+
+    private Task SelectAsync(HeldSaleListItemDto item)
+    {
+        DialogService.Close(item.Id);
+        return Task.CompletedTask;
+    }
+
+    private async Task CancelAsync(HeldSaleListItemDto item)
+    {
+        var confirm = await DialogService.Confirm(
+            $"Cancel held sale {item.HeldNumber}?",
+            "Cancel held sale",
+            new ConfirmOptions { OkButtonText = "Cancel held sale", CancelButtonText = "Back" });
+
+        if (confirm != true)
+        {
+            return;
+        }
+
+        var result = await PosService.CancelHeldSaleAsync(item.Id);
+        if (!result.Succeeded)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Cancel failed",
+                Detail = result.Error ?? "Could not cancel held sale.",
+                Duration = 4000
+            });
+            return;
+        }
+
+        Notifications.Notify(new NotificationMessage
+        {
+            Severity = NotificationSeverity.Success,
+            Summary = "Held sale cancelled",
+            Detail = item.HeldNumber,
+            Duration = 2500
+        });
+
+        await LoadAsync();
+    }
+}

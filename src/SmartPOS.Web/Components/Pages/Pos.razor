@@ -1,0 +1,1339 @@
+@page "/pos"
+@layout PosLayout
+@attribute [Authorize(Policy = Permissions.Sales.Operate)]
+@implements IAsyncDisposable
+@inject IPosService PosService
+@inject IPosShortcutService ShortcutService
+@inject SmartPOS.Web.Services.CustomerDisplayStateService CustomerDisplayState
+@inject ICustomerService CustomerService
+@inject IShiftService ShiftService
+@inject IStoreContext StoreContext
+@inject IStoreService StoreService
+@inject DialogService DialogService
+@inject NotificationService Notifications
+@inject IJSRuntime Js
+
+<PageTitle>Point of Sale · SmartPOS</PageTitle>
+
+@if (!_ready)
+{
+    <div class="pos-loading">
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" />
+        <p>Opening register…</p>
+    </div>
+}
+else if (_context is null)
+{
+    <div class="pos-loading">
+        <RadzenIcon Icon="warning" Style="font-size:2rem;color:var(--sp-warning)" />
+        <p>No active register found for this store. Add a register in Setup first.</p>
+        <RadzenButton Text="Go to Registers" Icon="desktop_windows" Click="@(() => Navigation.NavigateTo("/setup/registers"))" />
+    </div>
+}
+else if (_context.RequiresShift && !_context.HasOpenShift)
+{
+    <div class="pos-loading">
+        <RadzenIcon Icon="account_balance_wallet" Style="font-size:2rem;color:var(--sp-warning)" />
+        <p>Open a shift before billing. Cash drawer registers require an active shift.</p>
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.75rem" JustifyContent="JustifyContent.Center">
+            <RadzenButton Text="Open shift" Icon="play_arrow" ButtonStyle="ButtonStyle.Primary" Click="@OpenShiftAsync" />
+            <RadzenButton Text="Shifts" Icon="history" ButtonStyle="ButtonStyle.Light" Click="@(() => Navigation.NavigateTo("/shifts"))" />
+        </RadzenStack>
+    </div>
+}
+else
+{
+    @if (_context.HasOpenShift)
+    {
+        <div class="pos-shift-bar">
+            <span><RadzenIcon Icon="schedule" /> Shift @_context.ShiftNumber</span>
+            @if (_context.ShiftCashBalance is { } bal)
+            {
+                <span>Cash in drawer: <strong>@bal.ToString("C0")</strong></span>
+            }
+        </div>
+    }
+    <div class="pos-grid">
+        <section class="pos-cart-panel">
+            <div class="pos-cart-header">
+                <RadzenDropDown Class="pos-customer-select" @bind-Value="_selectedCustomerId" Data="@_customers" TextProperty="Display" ValueProperty="Id"
+                                AllowFiltering="true" AllowClear="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                                Placeholder="Walk-In Customer" Style="width:100%" Change="@OnCustomerChanged" />
+                @if (_selectedCustomer is not null)
+                {
+                    <div class="pos-customer-credit">
+                        <span>Balance: <strong>@_selectedCustomer.Balance.ToString("C0")</strong></span>
+                        @if (_selectedCustomer.CreditLimit > 0)
+                        {
+                            <span>Available udhaar: <strong>@_selectedCustomer.AvailableCredit.ToString("C0")</strong></span>
+                        }
+                    </div>
+                }
+                @if (!string.IsNullOrWhiteSpace(_activeHeldSaleNumber))
+                {
+                    <div class="pos-customer-credit">
+                        <span>Retrieved held sale: <strong>@_activeHeldSaleNumber</strong></span>
+                    </div>
+                }
+            </div>
+
+            <div class="pos-scan-row">
+                <RadzenIcon Icon="qr_code_scanner" />
+                <input @ref="_scanInput" @bind="_scanCode" @bind:event="oninput"
+                       @onkeydown="OnScanKeyDown" placeholder="Scan barcode or type SKU…" class="pos-scan-input" />
+                <RadzenButton Icon="add" ButtonStyle="ButtonStyle.Primary" Click="@ScanAndAdd" Title="Add item" />
+                <RadzenButton Icon="monitor" ButtonStyle="ButtonStyle.Light" Click="@OpenCustomerDisplayAsync" Title="Open customer display (Alt+J)" />
+                <RadzenButton Icon="@(_posLockMode ? "lock_open" : "lock")"
+                              ButtonStyle="@(_posLockMode ? ButtonStyle.Warning : ButtonStyle.Light)"
+                              Click="@TogglePosLockModeAsync"
+                              Title="Toggle POS full-screen lock (Alt+L)" />
+            </div>
+
+            @if (FavoriteProducts.Any())
+            {
+                <div class="pos-favorite-strip">
+                    <div class="pos-favorite-title"><RadzenIcon Icon="bolt" /> Quick buttons</div>
+                    <div class="pos-favorite-buttons">
+                        @foreach (var fav in FavoriteProducts.Take(8))
+                        {
+                            <button type="button" class="pos-favorite-button" disabled="@(fav.IsOutOfStock || _busy)" @onclick="() => AddProduct(fav)">
+                                <span>@fav.Name</span>
+                                <strong>@fav.UnitPrice.ToString("C0")</strong>
+                            </button>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (_cart.Count == 0)
+            {
+                <div class="pos-cart-empty">
+                    <RadzenIcon Icon="shopping_cart" />
+                    <p>Your cart is empty</p>
+                    <small>Scan a barcode, tap a product tile, or type to search</small>
+                </div>
+            }
+            else
+            {
+                <div class="pos-cart-lines">
+                    @foreach (var (line, index) in _cart.Select((l, i) => (l, i)))
+                    {
+                        <div class="pos-cart-line @(index == _selectedCartIndex ? "selected" : string.Empty)" @onclick="() => SelectCartLine(index)" @ondblclick="() => OpenQuantityDialogAsync(index)">
+                            <div class="pos-cart-line-info">
+                                <strong>@line.Name</strong>
+                                <small>@line.Sku · @line.Quantity.ToString("0.###") × @line.UnitPrice.ToString("C2")</small>
+                                @if (line.LineDiscount > 0)
+                                {
+                                    <small class="text-ok">Discount: @line.LineDiscount.ToString("C2")@(string.IsNullOrWhiteSpace(line.DiscountReason) ? string.Empty : $" · {line.DiscountReason}")</small>
+                                }
+                            </div>
+                            <div class="pos-cart-line-qty">
+                                <button type="button" title="Decrease quantity" @onclick:stopPropagation="true" @onclick="() => ChangeQty(index, -1)">−</button>
+                                <button type="button" class="pos-cart-line-qty-display" title="Set quantity (Alt+Q)" @onclick:stopPropagation="true" @onclick="() => OpenQuantityDialogAsync(index)">
+                                    @line.Quantity.ToString("0.###")
+                                </button>
+                                <button type="button" title="Increase quantity" @onclick:stopPropagation="true" @onclick="() => ChangeQty(index, 1)">+</button>
+                            </div>
+                            <strong class="pos-cart-line-total">@line.LineTotal.ToString("C2")</strong>
+                            <button type="button" class="pos-cart-line-remove" title="Discount" @onclick:stopPropagation="true" @onclick="() => ApplyLineDiscountAsync(index)">
+                                <RadzenIcon Icon="percent" />
+                            </button>
+                            <button type="button" class="pos-cart-line-remove" title="Remove line" @onclick:stopPropagation="true" @onclick="() => RemoveLine(index)">
+                                <RadzenIcon Icon="close" />
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+
+            <div class="pos-cart-footer">
+                <div class="pos-totals">
+                    <div><span>Subtotal</span><span>@CartGrossSubtotal.ToString("C2")</span></div>
+                    @if (CartDiscountTotal > 0)
+                    {
+                        <div><span>Discount</span><span>-@CartDiscountTotal.ToString("C2")</span></div>
+                    }
+                    <div><span>Tax</span><span>@CartTax.ToString("C2")</span></div>
+                    <div class="pos-total-due"><span>Total</span><span>@CartTotal.ToString("C2")</span></div>
+                </div>
+                <div class="pos-pay-actions" aria-label="POS payment and cart actions">
+                    <RadzenButton Text="Cash" Icon="payments" ButtonStyle="ButtonStyle.Primary" Class="pos-pay-btn pos-pay-btn-main"
+                                  Disabled="@(_cart.Count == 0 || _busy)" Click="@PayCash" />
+                    <RadzenButton Text="Card" Icon="credit_card" ButtonStyle="ButtonStyle.Secondary" Class="pos-pay-btn pos-pay-btn-main"
+                                  Disabled="@(_cart.Count == 0 || _busy)" Click="@PayCard" />
+                    <RadzenButton Text="Split" Icon="call_split" ButtonStyle="ButtonStyle.Info" Class="pos-pay-btn pos-pay-btn-main"
+                                  Disabled="@(_cart.Count == 0 || _busy)" Click="@PaySplit" />
+                    <RadzenButton Text="Udhaar" Icon="account_balance_wallet" ButtonStyle="ButtonStyle.Warning" Class="pos-pay-btn pos-pay-btn-main"
+                                  Disabled="@(_cart.Count == 0 || _busy || _selectedCustomer is null)"
+                                  Title="@(_selectedCustomer is null ? "Select a customer to sell on credit" : "Sell on credit (udhaar)")"
+                                  Click="@PayCredit" />
+                    <RadzenButton Text="Discount" Icon="percent" ButtonStyle="ButtonStyle.Light" Class="pos-pay-btn pos-pay-btn-secondary"
+                                  Disabled="@(_cart.Count == 0 || _busy)" Click="@ApplyInvoiceDiscountAsync" />
+                    <RadzenButton Text="Hold" Icon="pause_circle" ButtonStyle="ButtonStyle.Light" Class="pos-pay-btn pos-pay-btn-secondary"
+                                  Disabled="@(_cart.Count == 0 || _busy)" Click="@HoldCurrentSaleAsync" />
+                    <RadzenButton Text="Held" Icon="restore" ButtonStyle="ButtonStyle.Light" Class="pos-pay-btn pos-pay-btn-secondary"
+                                  Disabled="@_busy" Click="@RetrieveHeldSaleAsync" />
+                    <RadzenButton Text="Clear" Icon="delete_sweep" ButtonStyle="ButtonStyle.Light" Class="pos-pay-btn pos-pay-btn-secondary"
+                                  Title="Clear cart" Disabled="@(_cart.Count == 0 || _busy)" Click="@ClearCart" />
+                </div>
+            </div>
+        </section>
+
+        <section class="pos-catalog-panel">
+            <div class="pos-catalog-toolbar">
+                <div class="pos-filter-tabs">
+                    <button type="button" class="pos-filter-chip @(_filterMode == FilterAll ? "active" : "")"
+                            @onclick="() => SetFilter(FilterAll)">All</button>
+                    <button type="button" class="pos-filter-chip @(_filterMode == FilterCategory ? "active" : "")"
+                            @onclick="() => SetFilter(FilterCategory)">Category</button>
+                    <button type="button" class="pos-filter-chip @(_filterMode == FilterBrand ? "active" : "")"
+                            @onclick="() => SetFilter(FilterBrand)">Brand</button>
+                </div>
+                <div class="pos-product-filter">
+                    <RadzenIcon Icon="search" />
+                    <input value="@_productSearch"
+                           @oninput="OnProductSearchInput"
+                           placeholder="Filter products…"
+                           class="pos-product-filter-input" />
+                    @if (!string.IsNullOrWhiteSpace(_productSearch))
+                    {
+                        <button type="button" class="pos-product-filter-clear" title="Clear filter" @onclick="ClearProductSearchAsync">
+                            <RadzenIcon Icon="close" />
+                        </button>
+                    }
+                </div>
+            </div>
+
+            @if (_filterMode == FilterCategory)
+            {
+                <div class="pos-chip-row">
+                    <button type="button" class="pos-chip @(_categoryId is null ? "active" : "")"
+                            @onclick="() => SelectCategory(null)">All categories</button>
+                    @foreach (var cat in _categories)
+                    {
+                        <button type="button" class="pos-chip @(_categoryId == cat.Id ? "active" : "")"
+                                @onclick="() => SelectCategory(cat.Id)">@cat.Name</button>
+                    }
+                </div>
+            }
+            else if (_filterMode == FilterBrand)
+            {
+                <div class="pos-chip-row">
+                    <button type="button" class="pos-chip @(_brandId is null ? "active" : "")"
+                            @onclick="() => SelectBrand(null)">All brands</button>
+                    @foreach (var brand in _brands)
+                    {
+                        <button type="button" class="pos-chip @(_brandId == brand.Id ? "active" : "")"
+                                @onclick="() => SelectBrand(brand.Id)">@brand.Name</button>
+                    }
+                </div>
+            }
+
+            <div class="pos-product-grid">
+                @if (_loadingProducts)
+                {
+                    <div class="pos-grid-loading"><RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" /></div>
+                }
+                else if (_products.Count == 0)
+                {
+                    <p class="pos-grid-empty">No products match your filter.</p>
+                }
+                else
+                {
+                    @foreach (var product in _products)
+                    {
+                        <button type="button" class="pos-product-tile @(product.IsOutOfStock ? "out-of-stock" : "")"
+                                disabled="@(product.IsOutOfStock || _busy)"
+                                @onclick="() => AddProduct(product)">
+                            <span class="pos-favorite-toggle @(product.IsFavorite ? "active" : string.Empty)"
+                                  title="@(product.IsFavorite ? "Remove from quick buttons" : "Add to quick buttons")"
+                                  @onclick:stopPropagation="true"
+                                  @onclick="() => ToggleFavoriteAsync(product)">
+                                <RadzenIcon Icon="@(product.IsFavorite ? "star" : "star_border")" />
+                            </span>
+                            @if (!string.IsNullOrWhiteSpace(product.ImageUrl))
+                            {
+                                <img src="@product.ImageUrl" alt="" class="pos-product-img" />
+                            }
+                            else
+                            {
+                                <div class="pos-product-img pos-product-img-placeholder">
+                                    <RadzenIcon Icon="inventory_2" />
+                                </div>
+                            }
+                            <span class="pos-product-name">@product.Name</span>
+                            <span class="pos-product-sku">@product.Sku</span>
+                            <span class="pos-product-price">@product.UnitPrice.ToString("C2")</span>
+                            <span class="pos-product-stock @(product.IsOutOfStock ? "empty" : product.StockOnHand <= 5 ? "low" : "")">
+                                @product.StockOnHand.ToString("0.###") @(product.UnitAbbreviation ?? "in stock")
+                            </span>
+                        </button>
+                    }
+                }
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+
+    private const string FilterAll = "all";
+    private const string FilterCategory = "category";
+    private const string FilterBrand = "brand";
+
+    private ElementReference _scanInput;
+    private PosContextDto? _context;
+    private List<PosCartLineDto> _cart = [];
+    private List<PosProductDto> _products = [];
+    private List<LookupDto> _categories = [];
+    private List<LookupDto> _brands = [];
+
+    private string _customerName = "Walk-In Customer";
+    private Guid? _activeHeldSaleId;
+    private string? _activeHeldSaleNumber;
+    private decimal _invoiceDiscountAmount;
+    private string? _invoiceDiscountReason;
+    private List<CustomerLookupDto> _customers = [];
+    private Guid? _selectedCustomerId;
+    private CustomerLookupDto? _selectedCustomer;
+    private string _scanCode = string.Empty;
+    private string _productSearch = string.Empty;
+    private CancellationTokenSource? _productSearchDebounceCts;
+    private string _filterMode = FilterAll;
+    private Guid? _categoryId;
+    private Guid? _brandId;
+    private bool _ready;
+    private bool _loadingProducts;
+    private bool _busy;
+    private bool _posLockMode;
+    private int? _selectedCartIndex;
+    private PosReceiptDto? _lastReceipt;
+    private List<PosShortcutSettingDto> _shortcuts = [];
+    private string? _customerDisplayUrl;
+    private IEnumerable<PosProductDto> FavoriteProducts => _products
+        .Where(p => p.IsFavorite)
+        .OrderBy(p => p.FavoriteSortOrder)
+        .ThenBy(p => p.Name);
+    private IJSObjectReference? _keyboardModule;
+    private DotNetObjectReference<Pos>? _dotNetRef;
+
+    private decimal CartGrossSubtotal => Math.Round(_cart.Sum(l => l.LineGross), 2);
+    private decimal CartLineDiscount => Math.Round(_cart.Sum(l => l.LineDiscount), 2);
+    private decimal CartSubtotal => Math.Round(_cart.Sum(l => l.LineSubtotal), 2);
+    private decimal CartTax => Math.Round(_cart.Sum(l => l.LineTax), 2);
+    private decimal CartInvoiceDiscountBase => Math.Round(CartSubtotal + CartTax, 2);
+    private decimal CartInvoiceDiscount => Math.Round(Math.Min(Math.Max(0m, _invoiceDiscountAmount), CartInvoiceDiscountBase), 2);
+    private decimal CartDiscountTotal => CartLineDiscount + CartInvoiceDiscount;
+    private decimal CartTotal => Math.Round(CartInvoiceDiscountBase - CartInvoiceDiscount, 2);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _ready)
+        {
+            return;
+        }
+
+        if (StoreContext.StoreId is null)
+        {
+            var stores = await StoreService.GetAllAsync(includeInactive: false);
+            if (stores.Count > 0)
+            {
+                StoreContext.SetStore(stores[0].Id);
+            }
+        }
+
+        if (StoreContext.StoreId is not { } storeId)
+        {
+            _ready = true;
+            StateHasChanged();
+            return;
+        }
+
+        _context = await PosService.GetContextAsync(storeId);
+        _shortcuts = (await ShortcutService.GetAsync()).ToList();
+        if (_context is not null)
+        {
+            _customerDisplayUrl = $"/customer-display/{_context.RegisterId}";
+            UpdateCustomerDisplay();
+        }
+        var filterLookups = await PosService.GetProductFilterLookupsAsync(storeId);
+        _categories = filterLookups.Categories.ToList();
+        _brands = filterLookups.Brands.ToList();
+        _customers = (await CustomerService.SearchLookupAsync(null, take: 200)).ToList();
+        await ReloadProducts();
+        _ready = true;
+
+        _dotNetRef = DotNetObjectReference.Create(this);
+        _keyboardModule = await Js.InvokeAsync<IJSObjectReference>("import", "./pos-keyboard.js");
+        await _keyboardModule.InvokeVoidAsync("register", _dotNetRef, _shortcuts);
+
+        StateHasChanged();
+        try { await _scanInput.FocusAsync(); } catch { /* ok */ }
+    }
+
+    private async Task OnProductSearchInput(ChangeEventArgs args)
+    {
+        _productSearch = args.Value?.ToString() ?? string.Empty;
+
+        _productSearchDebounceCts?.Cancel();
+        _productSearchDebounceCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _productSearchDebounceCts = cts;
+
+        try
+        {
+            await Task.Delay(180, cts.Token);
+            if (!cts.IsCancellationRequested)
+            {
+                await InvokeAsync(ReloadProducts);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // Another key was typed before the debounce delay completed.
+        }
+    }
+
+    private async Task ClearProductSearchAsync()
+    {
+        _productSearchDebounceCts?.Cancel();
+        _productSearch = string.Empty;
+        await ReloadProducts();
+    }
+
+    private async Task ReloadProducts()
+    {
+        if (_context is null)
+        {
+            return;
+        }
+
+        _loadingProducts = true;
+        _products = (await PosService.GetProductsAsync(
+            _context.StoreId,
+            _categoryId,
+            _brandId,
+            string.IsNullOrWhiteSpace(_productSearch) ? null : _productSearch)).ToList();
+        _loadingProducts = false;
+    }
+
+    private async Task SetFilter(string mode)
+    {
+        _filterMode = mode;
+        if (mode == FilterAll)
+        {
+            _categoryId = null;
+            _brandId = null;
+        }
+        await ReloadProducts();
+    }
+
+    private async Task SelectCategory(Guid? id)
+    {
+        _categoryId = id;
+        await ReloadProducts();
+    }
+
+    private async Task SelectBrand(Guid? id)
+    {
+        _brandId = id;
+        await ReloadProducts();
+    }
+
+    private async Task ReloadContextAsync()
+    {
+        if (StoreContext.StoreId is not { } storeId)
+        {
+            return;
+        }
+
+        _context = await PosService.GetContextAsync(storeId);
+        StateHasChanged();
+    }
+
+    private async Task OpenShiftAsync()
+    {
+        if (_context is null)
+        {
+            return;
+        }
+
+        var opened = await DialogService.OpenAsync<OpenShiftDialog>(
+            "Open shift",
+            new Dictionary<string, object?> { [nameof(OpenShiftDialog.RegisterId)] = _context.RegisterId },
+            new DialogOptions { Width = "480px", CloseDialogOnOverlayClick = false });
+
+        if (opened is true)
+        {
+            await ReloadContextAsync();
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Success,
+                Summary = "Shift opened",
+                Detail = "You can now process sales.",
+                Duration = 3500
+            });
+        }
+    }
+
+    private void AddProduct(PosProductDto product)
+    {
+        if (product.IsOutOfStock)
+        {
+            NotifyWarn("Out of stock", $"{product.Name} is not available.");
+            return;
+        }
+
+        var existingIndex = _cart.FindIndex(c =>
+            c.ProductId == product.ProductId && c.VariantId == product.VariantId);
+
+        if (existingIndex >= 0)
+        {
+            _cart[existingIndex].Quantity += 1;
+            _selectedCartIndex = existingIndex;
+        }
+        else
+        {
+            _cart.Add(new PosCartLineDto
+            {
+                ProductId = product.ProductId,
+                VariantId = product.VariantId,
+                Sku = product.Sku,
+                Name = product.Name,
+                Quantity = 1,
+                UnitPrice = product.UnitPrice,
+                TaxRate = product.TaxRate
+            });
+            _selectedCartIndex = _cart.Count - 1;
+        }
+
+        UpdateCustomerDisplay();
+    }
+
+
+    private async Task ToggleFavoriteAsync(PosProductDto product)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        var newValue = !product.IsFavorite;
+        var result = await PosService.ToggleProductFavoriteAsync(product.ProductId, newValue);
+        if (!result.Succeeded)
+        {
+            NotifyWarn("Quick button", result.Error ?? "Could not update favorite product.");
+            return;
+        }
+
+        foreach (var item in _products.Where(p => p.ProductId == product.ProductId))
+        {
+            item.IsFavorite = newValue;
+            if (!newValue)
+            {
+                item.FavoriteSortOrder = 0;
+            }
+            else if (item.FavoriteSortOrder <= 0)
+            {
+                item.FavoriteSortOrder = _products.Where(p => p.IsFavorite).Select(p => p.FavoriteSortOrder).DefaultIfEmpty(0).Max() + 10;
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task ScanAndAdd()
+    {
+        if (_context is null || string.IsNullOrWhiteSpace(_scanCode))
+        {
+            return;
+        }
+
+        var product = await PosService.LookupBarcodeAsync(_context.StoreId, _scanCode);
+        if (product is null)
+        {
+            NotifyWarn("Not found", $"No product matches \"{_scanCode}\".");
+            _scanCode = string.Empty;
+            return;
+        }
+
+        AddProduct(product);
+        _scanCode = string.Empty;
+    }
+
+    private async Task OnScanKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await ScanAndAdd();
+        }
+    }
+
+    private void ChangeQty(int index, decimal delta)
+    {
+        if (index < 0 || index >= _cart.Count)
+        {
+            return;
+        }
+
+        var line = _cart[index];
+        line.Quantity += delta;
+        if (line.Quantity <= 0)
+        {
+            _cart.RemoveAt(index);
+            KeepSelectedLineInRange();
+        }
+        else
+        {
+            _selectedCartIndex = index;
+            NormalizeLineDiscount(line);
+        }
+
+        NormalizeInvoiceDiscount();
+        UpdateCustomerDisplay();
+    }
+
+    private async Task OpenQuantityDialogAsync(int index)
+    {
+        if (index < 0 || index >= _cart.Count)
+        {
+            return;
+        }
+
+        _selectedCartIndex = index;
+        var line = _cart[index];
+        var result = await DialogService.OpenAsync<QuickQuantityDialog>(
+            "Set quantity",
+            new Dictionary<string, object?>
+            {
+                [nameof(QuickQuantityDialog.ProductName)] = line.Name,
+                [nameof(QuickQuantityDialog.Sku)] = line.Sku,
+                [nameof(QuickQuantityDialog.CurrentQuantity)] = line.Quantity
+            },
+            new DialogOptions { Width = "460px", CloseDialogOnOverlayClick = false });
+
+        if (result is decimal quantity)
+        {
+            SetQuantity(index, quantity);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void SetQuantity(int index, decimal quantity)
+    {
+        if (index < 0 || index >= _cart.Count)
+        {
+            return;
+        }
+
+        quantity = Math.Round(quantity, 3);
+        if (quantity <= 0)
+        {
+            RemoveLine(index);
+            return;
+        }
+
+        var line = _cart[index];
+        line.Quantity = quantity;
+        _selectedCartIndex = index;
+        NormalizeLineDiscount(line);
+        NormalizeInvoiceDiscount();
+        UpdateCustomerDisplay();
+    }
+
+    private void RemoveLine(int index)
+    {
+        if (index < 0 || index >= _cart.Count)
+        {
+            return;
+        }
+
+        _cart.RemoveAt(index);
+        KeepSelectedLineInRange();
+        NormalizeInvoiceDiscount();
+        UpdateCustomerDisplay();
+    }
+
+    private void SelectCartLine(int index)
+    {
+        if (index >= 0 && index < _cart.Count)
+        {
+            _selectedCartIndex = index;
+        }
+    }
+
+    private void KeepSelectedLineInRange()
+    {
+        if (_cart.Count == 0)
+        {
+            _selectedCartIndex = null;
+        }
+        else if (_selectedCartIndex is null || _selectedCartIndex >= _cart.Count)
+        {
+            _selectedCartIndex = _cart.Count - 1;
+        }
+    }
+
+    private void ClearCart()
+    {
+        _cart.Clear();
+        _selectedCartIndex = null;
+        _selectedCustomerId = null;
+        _selectedCustomer = null;
+        _customerName = "Walk-In Customer";
+        _activeHeldSaleId = null;
+        _activeHeldSaleNumber = null;
+        _invoiceDiscountAmount = 0m;
+        _invoiceDiscountReason = null;
+        UpdateCustomerDisplay();
+    }
+
+    private void OnCustomerChanged(object? value)
+    {
+        _selectedCustomer = _selectedCustomerId is { } id
+            ? _customers.FirstOrDefault(c => c.Id == id)
+            : null;
+        _customerName = _selectedCustomer?.Name ?? "Walk-In Customer";
+        UpdateCustomerDisplay();
+    }
+
+    private async Task HoldCurrentSaleAsync()
+    {
+        if (_context is null || _cart.Count == 0 || _busy)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.Confirm(
+            $"Hold this sale with {_cart.Count} item(s) and total {CartTotal.ToString("C2")}?",
+            "Hold sale",
+            new ConfirmOptions { OkButtonText = "Hold sale", CancelButtonText = "Cancel" });
+
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        _busy = true;
+        var result = await PosService.HoldSaleAsync(new HoldSaleDto
+        {
+            StoreId = _context.StoreId,
+            RegisterId = _context.RegisterId,
+            CustomerId = _selectedCustomerId,
+            CustomerName = _customerName,
+            InvoiceDiscountAmount = CartInvoiceDiscount,
+            DiscountReason = _invoiceDiscountReason,
+            Lines = _cart.ToList()
+        });
+        _busy = false;
+
+        if (!result.Succeeded)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Hold failed",
+                Detail = result.Error ?? "Could not hold this sale.",
+                Duration = 4500
+            });
+            return;
+        }
+
+        ClearCart();
+        Notifications.Notify(new NotificationMessage
+        {
+            Severity = NotificationSeverity.Success,
+            Summary = "Sale held",
+            Detail = "The cart has been saved and can be retrieved later.",
+            Duration = 3500
+        });
+
+        try { await _scanInput.FocusAsync(); } catch { /* ok */ }
+    }
+
+    private async Task RetrieveHeldSaleAsync()
+    {
+        if (_context is null || _busy)
+        {
+            return;
+        }
+
+        if (_cart.Count > 0)
+        {
+            var confirmed = await DialogService.Confirm(
+                "Retrieving a held sale will replace the current cart. Continue?",
+                "Retrieve held sale",
+                new ConfirmOptions { OkButtonText = "Continue", CancelButtonText = "Cancel" });
+
+            if (confirmed != true)
+            {
+                return;
+            }
+        }
+
+        var selected = await DialogService.OpenAsync<HeldSalesDialog>(
+            "Held sales",
+            new Dictionary<string, object?>
+            {
+                [nameof(HeldSalesDialog.StoreId)] = _context.StoreId,
+                [nameof(HeldSalesDialog.RegisterId)] = _context.RegisterId
+            },
+            new DialogOptions { Width = "900px", CloseDialogOnOverlayClick = false });
+
+        if (selected is not Guid heldSaleId)
+        {
+            return;
+        }
+
+        var heldSale = await PosService.GetHeldSaleAsync(heldSaleId);
+        if (heldSale is null)
+        {
+            NotifyWarn("Held sale unavailable", "This held sale was already retrieved or cancelled.");
+            return;
+        }
+
+        _cart = heldSale.Lines.ToList();
+        _selectedCustomerId = heldSale.CustomerId;
+        _selectedCustomer = _selectedCustomerId is { } id
+            ? _customers.FirstOrDefault(c => c.Id == id)
+            : null;
+        _customerName = _selectedCustomer?.Name ?? heldSale.CustomerName;
+        _activeHeldSaleId = heldSale.Id;
+        _activeHeldSaleNumber = heldSale.HeldNumber;
+        _invoiceDiscountAmount = heldSale.InvoiceDiscountAmount;
+        _invoiceDiscountReason = heldSale.DiscountReason;
+        NormalizeInvoiceDiscount();
+        UpdateCustomerDisplay();
+
+        Notifications.Notify(new NotificationMessage
+        {
+            Severity = NotificationSeverity.Success,
+            Summary = "Held sale retrieved",
+            Detail = heldSale.HeldNumber,
+            Duration = 3000
+        });
+
+        try { await _scanInput.FocusAsync(); } catch { /* ok */ }
+    }
+
+    private async Task ApplyLineDiscountAsync(int index)
+    {
+        if (index < 0 || index >= _cart.Count)
+        {
+            return;
+        }
+
+        var line = _cart[index];
+        var result = await DialogService.OpenAsync<PosDiscountDialog>(
+            $"Discount · {line.Name}",
+            new Dictionary<string, object?>
+            {
+                [nameof(PosDiscountDialog.Title)] = $"Discount · {line.Name}",
+                [nameof(PosDiscountDialog.MaxAmount)] = line.LineGross,
+                [nameof(PosDiscountDialog.ExistingAmount)] = line.LineDiscount,
+                [nameof(PosDiscountDialog.ExistingReason)] = line.DiscountReason,
+                [nameof(PosDiscountDialog.RequireManagerApproval)] = true,
+                [nameof(PosDiscountDialog.StoreId)] = _context?.StoreId,
+                [nameof(PosDiscountDialog.ApprovalReference)] = line.Sku
+            },
+            new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = false });
+
+        if (result is PosDiscountResultDto discount)
+        {
+            line.DiscountAmount = discount.Amount;
+            line.DiscountReason = discount.Reason;
+            NormalizeLineDiscount(line);
+            NormalizeInvoiceDiscount();
+            UpdateCustomerDisplay();
+        }
+    }
+
+    private async Task ApplyInvoiceDiscountAsync()
+    {
+        if (_cart.Count == 0)
+        {
+            return;
+        }
+
+        var result = await DialogService.OpenAsync<PosDiscountDialog>(
+            "Invoice discount",
+            new Dictionary<string, object?>
+            {
+                [nameof(PosDiscountDialog.Title)] = "Invoice discount",
+                [nameof(PosDiscountDialog.MaxAmount)] = CartInvoiceDiscountBase,
+                [nameof(PosDiscountDialog.ExistingAmount)] = CartInvoiceDiscount,
+                [nameof(PosDiscountDialog.ExistingReason)] = _invoiceDiscountReason,
+                [nameof(PosDiscountDialog.RequireManagerApproval)] = true,
+                [nameof(PosDiscountDialog.StoreId)] = _context?.StoreId,
+                [nameof(PosDiscountDialog.ApprovalReference)] = "Invoice discount"
+            },
+            new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = false });
+
+        if (result is PosDiscountResultDto discount)
+        {
+            _invoiceDiscountAmount = discount.Amount;
+            _invoiceDiscountReason = discount.Reason;
+            NormalizeInvoiceDiscount();
+            UpdateCustomerDisplay();
+        }
+    }
+
+    private static void NormalizeLineDiscount(PosCartLineDto line)
+    {
+        line.DiscountAmount = Math.Round(Math.Min(Math.Max(0m, line.DiscountAmount), line.LineGross), 2);
+        if (line.DiscountAmount <= 0)
+        {
+            line.DiscountReason = null;
+        }
+    }
+
+    private void NormalizeInvoiceDiscount()
+    {
+        _invoiceDiscountAmount = Math.Round(Math.Min(Math.Max(0m, _invoiceDiscountAmount), CartInvoiceDiscountBase), 2);
+        if (_invoiceDiscountAmount <= 0)
+        {
+            _invoiceDiscountReason = null;
+        }
+    }
+
+    private async Task PayCredit()
+    {
+        if (_context is null || _cart.Count == 0 || _selectedCustomer is null)
+        {
+            return;
+        }
+
+        if (_selectedCustomer.CreditLimit > 0 && _selectedCustomer.Balance + CartTotal > _selectedCustomer.CreditLimit)
+        {
+            NotifyWarn("Credit limit reached",
+                $"Available udhaar for {_selectedCustomer.Name} is {_selectedCustomer.AvailableCredit.ToString("C0")}.");
+            return;
+        }
+
+        var confirmed = await DialogService.Confirm(
+            $"Add {CartTotal.ToString("C2")} to {_selectedCustomer.Name}'s udhaar account?",
+            "Confirm credit sale",
+            new ConfirmOptions { OkButtonText = "Confirm", CancelButtonText = "Cancel" });
+
+        if (confirmed == true)
+        {
+            await CompleteSale("Credit", 0m);
+        }
+    }
+
+    [JSInvokable]
+    public async Task ShowShortcutHelp()
+    {
+        await DialogService.OpenAsync<PosShortcutHelpDialog>(
+            "POS shortcut keys",
+            new Dictionary<string, object?> { [nameof(PosShortcutHelpDialog.Shortcuts)] = _shortcuts },
+            new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = true });
+    }
+
+    [JSInvokable]
+    public async Task FocusSearch()
+    {
+        try { await _scanInput.FocusAsync(); } catch { /* ok */ }
+    }
+
+    [JSInvokable]
+    public async Task TriggerCustomerSelect()
+    {
+        if (_keyboardModule is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _keyboardModule.InvokeVoidAsync("clickFirst", ".pos-customer-select");
+        }
+        catch
+        {
+            NotifyWarn("Customer", "Use the customer dropdown to select or search a customer.");
+        }
+    }
+
+    [JSInvokable]
+    public Task TriggerPaymentMenu() => PaySplit();
+
+    [JSInvokable]
+    public Task TriggerCashPay() => PayCash();
+
+    [JSInvokable]
+    public async Task TriggerReprintLastReceipt()
+    {
+        if (_lastReceipt is null)
+        {
+            NotifyWarn("No receipt", "Complete a sale first, then press F9 to reprint the last receipt.");
+            return;
+        }
+
+        await DialogService.OpenAsync<PosReceiptDialog>(
+            "Receipt",
+            new Dictionary<string, object?>
+            {
+                [nameof(PosReceiptDialog.Receipt)] = _lastReceipt,
+                [nameof(PosReceiptDialog.Reprint)] = true
+            },
+            new DialogOptions { Width = "480px", CloseDialogOnOverlayClick = false });
+    }
+
+    [JSInvokable]
+    public Task TriggerHoldSale() => HoldCurrentSaleAsync();
+
+    [JSInvokable]
+    public Task TriggerRetrieveHeldSale() => RetrieveHeldSaleAsync();
+
+    [JSInvokable]
+    public Task TriggerInvoiceDiscount() => ApplyInvoiceDiscountAsync();
+
+    [JSInvokable]
+    public async Task TriggerQuickQuantity()
+    {
+        if (_cart.Count == 0)
+        {
+            return;
+        }
+
+        var index = _selectedCartIndex ?? _cart.Count - 1;
+        await OpenQuantityDialogAsync(index);
+    }
+
+    [JSInvokable]
+    public async Task TriggerClearCart()
+    {
+        if (_cart.Count == 0)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.Confirm(
+            "Clear the current cart?",
+            "Clear cart",
+            new ConfirmOptions { OkButtonText = "Clear", CancelButtonText = "Cancel" });
+
+        if (confirmed == true)
+        {
+            ClearCart();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    [JSInvokable]
+    public async Task TriggerRemoveSelectedLine()
+    {
+        if (_selectedCartIndex is { } index)
+        {
+            RemoveLine(index);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    [JSInvokable]
+    public async Task TriggerIncreaseSelectedLine()
+    {
+        if (_selectedCartIndex is { } index)
+        {
+            ChangeQty(index, 1);
+        }
+        else if (_cart.Count > 0)
+        {
+            _selectedCartIndex = _cart.Count - 1;
+            ChangeQty(_selectedCartIndex.Value, 1);
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public async Task TriggerDecreaseSelectedLine()
+    {
+        if (_selectedCartIndex is { } index)
+        {
+            ChangeQty(index, -1);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+
+    [JSInvokable]
+    public Task TriggerCustomerDisplay() => OpenCustomerDisplayAsync();
+
+    [JSInvokable]
+    public Task TriggerFullScreenLock() => TogglePosLockModeAsync();
+
+    [JSInvokable]
+    public Task TriggerShiftMenu()
+    {
+        Navigation.NavigateTo("/shifts");
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public async Task TriggerXReport()
+    {
+        if (_context?.ShiftId is not { } shiftId)
+        {
+            NotifyWarn("No open shift", "Open a shift first to view the X report.");
+            return;
+        }
+
+        var report = await ShiftService.GetReportAsync(shiftId);
+        await DialogService.OpenAsync<ShiftReportDialog>(
+            "X report",
+            new Dictionary<string, object?> { [nameof(ShiftReportDialog.Report)] = report },
+            new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = false });
+    }
+
+    [JSInvokable]
+    public Task TriggerZReport()
+    {
+        Navigation.NavigateTo("/shifts");
+        return Task.CompletedTask;
+    }
+
+    private async Task PayCash()
+    {
+        if (_context is null || _cart.Count == 0)
+        {
+            return;
+        }
+
+        var tendered = await DialogService.OpenAsync<PosCashDialog>(
+            "Cash payment",
+            new Dictionary<string, object?> { [nameof(PosCashDialog.Total)] = CartTotal },
+            new DialogOptions { Width = "420px", CloseDialogOnOverlayClick = false });
+
+        if (tendered is decimal amount)
+        {
+            await CompleteSale("Cash", amount);
+        }
+    }
+
+    private async Task PayCard()
+    {
+        if (_context is null || _cart.Count == 0)
+        {
+            return;
+        }
+
+        await CompleteSale("Card", CartTotal);
+    }
+
+    private async Task PaySplit()
+    {
+        if (_context is null || _cart.Count == 0)
+        {
+            return;
+        }
+
+        var payments = await DialogService.OpenAsync<PosSplitPaymentDialog>(
+            "Split payment",
+            new Dictionary<string, object?> { [nameof(PosSplitPaymentDialog.Total)] = CartTotal },
+            new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = false });
+
+        if (payments is List<PosPaymentLineDto> lines)
+        {
+            if (lines.Any(l => string.Equals(l.Method, "Credit", StringComparison.OrdinalIgnoreCase)) && _selectedCustomer is null)
+            {
+                NotifyWarn("Customer required", "Select a customer before using credit/udhaar in split payment.");
+                return;
+            }
+
+            await CompleteSale("Split", CartTotal, lines);
+        }
+    }
+
+    private async Task CompleteSale(string method, decimal amountTendered, IList<PosPaymentLineDto>? paymentLines = null)
+    {
+        if (_context is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        var checkout = new PosCheckoutDto
+        {
+            StoreId = _context.StoreId,
+            RegisterId = _context.RegisterId,
+            CustomerId = _selectedCustomerId,
+            CustomerName = _customerName,
+            PaymentMethod = method,
+            AmountTendered = amountTendered,
+            InvoiceDiscountAmount = CartInvoiceDiscount,
+            DiscountReason = _invoiceDiscountReason,
+            HeldSaleId = _activeHeldSaleId,
+            Lines = _cart.ToList(),
+            Payments = paymentLines?.ToList() ?? []
+        };
+
+        var result = await PosService.CompleteSaleAsync(checkout);
+        _busy = false;
+
+        if (!result.Succeeded || result.Data is null)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Sale failed",
+                Detail = result.Error ?? "Could not complete sale.",
+                Duration = 5000
+            });
+            return;
+        }
+
+        _lastReceipt = result.Data;
+        ShowReceiptOnCustomerDisplay(result.Data);
+        _cart.Clear();
+        _selectedCartIndex = null;
+        _selectedCustomerId = null;
+        _selectedCustomer = null;
+        _customerName = "Walk-In Customer";
+        _activeHeldSaleId = null;
+        _activeHeldSaleNumber = null;
+        _customers = (await CustomerService.SearchLookupAsync(null, take: 200)).ToList();
+        await ReloadProducts();
+
+        await DialogService.OpenAsync<PosReceiptDialog>(
+            "Receipt",
+            new Dictionary<string, object?> { [nameof(PosReceiptDialog.Receipt)] = result.Data },
+            new DialogOptions { Width = "480px", CloseDialogOnOverlayClick = false });
+
+        try { await _scanInput.FocusAsync(); } catch { /* ok */ }
+    }
+
+
+    private async Task TogglePosLockModeAsync()
+    {
+        _posLockMode = !_posLockMode;
+        if (_keyboardModule is not null)
+        {
+            try
+            {
+                await _keyboardModule.InvokeVoidAsync("setPosLockMode", _posLockMode);
+            }
+            catch
+            {
+                NotifyWarn("POS lock", "Full-screen mode was blocked by the browser, but POS focus mode was applied.");
+            }
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task OpenCustomerDisplayAsync()
+    {
+        if (_context is null)
+        {
+            NotifyWarn("Customer display", "Open a register first.");
+            return;
+        }
+
+        _customerDisplayUrl ??= $"/customer-display/{_context.RegisterId}";
+        UpdateCustomerDisplay();
+
+        if (_keyboardModule is not null)
+        {
+            try
+            {
+                await _keyboardModule.InvokeVoidAsync("openWindow", _customerDisplayUrl);
+                return;
+            }
+            catch
+            {
+                // Fall back to same-tab navigation if popup opening is blocked.
+            }
+        }
+
+        Navigation.NavigateTo(_customerDisplayUrl);
+    }
+
+    private void UpdateCustomerDisplay()
+    {
+        if (_context is null)
+        {
+            return;
+        }
+
+        CustomerDisplayState.Set(new CustomerDisplayStateDto
+        {
+            RegisterId = _context.RegisterId,
+            StoreName = _context.StoreName,
+            RegisterName = _context.RegisterName,
+            CustomerName = _customerName,
+            Status = _cart.Count == 0 ? "Ready" : "In progress",
+            ItemCount = (int)Math.Round(_cart.Sum(x => x.Quantity), 0),
+            Subtotal = CartGrossSubtotal,
+            DiscountAmount = CartDiscountTotal,
+            TaxAmount = CartTax,
+            TotalAmount = CartTotal,
+            Lines = _cart.Select(x => new CustomerDisplayLineDto
+            {
+                Sku = x.Sku,
+                Name = x.Name,
+                Quantity = x.Quantity,
+                UnitPrice = x.UnitPrice,
+                LineTotal = x.LineTotal
+            }).ToList()
+        });
+    }
+
+    private void ShowReceiptOnCustomerDisplay(PosReceiptDto receipt)
+    {
+        if (_context is null)
+        {
+            return;
+        }
+
+        CustomerDisplayState.Set(new CustomerDisplayStateDto
+        {
+            RegisterId = _context.RegisterId,
+            StoreName = receipt.StoreName,
+            RegisterName = receipt.RegisterName,
+            CustomerName = receipt.CustomerName,
+            Status = "Sale complete",
+            SaleNumber = receipt.SaleNumber,
+            ItemCount = (int)Math.Round(receipt.Lines.Sum(x => x.Quantity), 0),
+            Subtotal = receipt.Subtotal,
+            DiscountAmount = receipt.DiscountAmount,
+            TaxAmount = receipt.TaxAmount,
+            TotalAmount = receipt.TotalAmount,
+            Lines = receipt.Lines.Select(x => new CustomerDisplayLineDto
+            {
+                Sku = x.Sku,
+                Name = x.Name,
+                Quantity = x.Quantity,
+                UnitPrice = x.UnitPrice,
+                LineTotal = x.LineTotal
+            }).ToList()
+        });
+    }
+
+    private void NotifyWarn(string summary, string detail) =>
+        Notifications.Notify(new NotificationMessage
+        {
+            Severity = NotificationSeverity.Warning,
+            Summary = summary,
+            Detail = detail,
+            Duration = 3500
+        });
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_keyboardModule is not null)
+        {
+            try
+            {
+                await _keyboardModule.InvokeVoidAsync("setPosLockMode", false);
+                await _keyboardModule.InvokeVoidAsync("dispose");
+                await _keyboardModule.DisposeAsync();
+            }
+            catch { /* circuit gone */ }
+        }
+        _productSearchDebounceCts?.Cancel();
+        _productSearchDebounceCts?.Dispose();
+        _dotNetRef?.Dispose();
+    }
+}

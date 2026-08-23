@@ -1,0 +1,47 @@
+@inject ICustomerService CustomerService
+
+<div class="customer-ledger">
+    @if (_loading)
+    {
+        <div class="customer-ledger-loading">
+            <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+        </div>
+    }
+    else if (_entries.Count == 0)
+    {
+        <p class="customer-ledger-empty">No ledger entries yet.</p>
+    }
+    else
+    {
+        <RadzenDataGrid Data="@_entries" TItem="CustomerLedgerEntryDto" AllowPaging="true" PageSize="10">
+            <Columns>
+                <RadzenDataGridColumn TItem="CustomerLedgerEntryDto" Property="EntryDate" Title="Date" Width="160px">
+                    <Template Context="e">@e.EntryDate.ToLocalTime().ToString("dd MMM yyyy · h:mm tt")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="CustomerLedgerEntryDto" Property="EntryType" Title="Type" Width="110px" />
+                <RadzenDataGridColumn TItem="CustomerLedgerEntryDto" Property="Reference" Title="Reference" />
+                <RadzenDataGridColumn TItem="CustomerLedgerEntryDto" Property="Amount" Title="Amount" Width="130px" TextAlign="TextAlign.End">
+                    <Template Context="e">
+                        <span class="@(e.Amount >= 0 ? "text-warn" : "text-ok")">@e.Amount.ToString("C2")</span>
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="CustomerLedgerEntryDto" Property="BalanceAfter" Title="Balance" Width="130px" TextAlign="TextAlign.End">
+                    <Template Context="e"><strong>@e.BalanceAfter.ToString("C2")</strong></Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid CustomerId { get; set; }
+
+    private IReadOnlyList<CustomerLedgerEntryDto> _entries = [];
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _entries = await CustomerService.GetLedgerAsync(CustomerId);
+        _loading = false;
+    }
+}

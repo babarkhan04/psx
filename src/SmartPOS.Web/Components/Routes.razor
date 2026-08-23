@@ -1,0 +1,33 @@
+<CascadingAuthenticationState>
+    <CircuitContextInitializer>
+    <Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+        <Found Context="routeData">
+            <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+                <NotAuthorized>
+                    @if (context.User.Identity?.IsAuthenticated != true)
+                    {
+                        <RedirectToLogin />
+                    }
+                    else
+                    {
+                        <div class="access-denied">
+                            <RadzenCard class="error-card">
+                                <RadzenIcon Icon="lock" Style="font-size:2.5rem;" />
+                                <h2>Access denied</h2>
+                                <p>You do not have permission to view this page.</p>
+                                <RadzenButton Text="Back to dashboard" Icon="dashboard"
+                                              Click="@(() => Navigation.NavigateTo("/dashboard"))" />
+                            </RadzenCard>
+                        </div>
+                    }
+                </NotAuthorized>
+            </AuthorizeRouteView>
+            <FocusOnNavigate RouteData="routeData" Selector="h1" />
+        </Found>
+    </Router>
+    </CircuitContextInitializer>
+</CascadingAuthenticationState>
+
+@code {
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+}

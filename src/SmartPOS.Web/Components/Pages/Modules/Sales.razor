@@ -1,0 +1,222 @@
+@page "/sales"
+@attribute [Authorize(Policy = Permissions.Sales.View)]
+@inject IPosService PosService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject DialogService DialogService
+@inject NotificationService Notifications
+@inject NavigationManager Navigation
+
+<PageTitle>Sales & Returns · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Sales &amp; Returns</h1>
+        <p class="page-subtitle">Point-of-sale transactions, receipts, returns, and voids.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Text" ValueProperty="Value"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Change="@(_ => LoadAsync())" Style="min-width:190px" />
+        <RadzenDatePicker @bind-Value="_from" DateFormat="dd MMM yyyy" Change="@(_ => LoadAsync())"
+                          Placeholder="From" Style="width:150px" ShowTime="false" />
+        <RadzenDatePicker @bind-Value="_to" DateFormat="dd MMM yyyy" Change="@(_ => LoadAsync())"
+                          Placeholder="To" Style="width:150px" ShowTime="false" />
+        <RadzenTextBox @bind-Value="_search" Placeholder="Sale # or customer…" Style="min-width:200px"
+                       @oninput="@(args => _search = args.Value?.ToString())" Change="@(_ => LoadAsync())" />
+        <RadzenButton Icon="search" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" />
+    </div>
+</div>
+
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Transactions</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="receipt_long" /></span></div>
+        <div class="kpi-value">@_summary.SaleCount</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Gross sales</span><span class="kpi-chip chip-sales"><RadzenIcon Icon="payments" /></span></div>
+        <div class="kpi-value">@_summary.GrossSales.ToString("C0")</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">GST collected</span><span class="kpi-chip chip-cash"><RadzenIcon Icon="account_balance" /></span></div>
+        <div class="kpi-value">@_summary.TaxCollected.ToString("C0")</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Items sold</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="shopping_basket" /></span></div>
+        <div class="kpi-value">@_summary.ItemsSold</div>
+    </div>
+</div>
+
+<RadzenCard class="content-card grid-card">
+    <RadzenDataGrid Data="@_sales" TItem="SaleListItemDto" AllowSorting="true" AllowPaging="true"
+                    PageSize="15" EmptyText="No sales in this range." IsLoading="@_loading">
+        <Columns>
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="SaleNumber" Title="Sale #" Width="170px" />
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="CompletedOn" Title="Date" Width="170px">
+                <Template Context="s">@s.CompletedOn.ToLocalTime().ToString("dd MMM yyyy · h:mm tt")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="CustomerName" Title="Customer" />
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="StoreName" Title="Store" />
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="CashierName" Title="Cashier" />
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="PaymentMethod" Title="Payment" Width="110px" TextAlign="TextAlign.Center" />
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="ItemCount" Title="Items" Width="80px" TextAlign="TextAlign.Center" />
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="TotalAmount" Title="Total" Width="130px" TextAlign="TextAlign.End">
+                <Template Context="s"><strong>@s.TotalAmount.ToString("C2")</strong></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SaleListItemDto" Property="Status" Title="Status" Width="130px" TextAlign="TextAlign.Center">
+                <Template Context="s">
+                    <span class="status-pill @(s.Status == "Completed" ? "on" : s.Status.Contains("Return") ? "off" : "off")">@s.Status</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="SaleListItemDto" Title="" Width="430px" Sortable="false" TextAlign="TextAlign.End">
+                <Template Context="s">
+                    <RadzenButton Icon="receipt" Text="Receipt" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => ViewReceipt(s))" />
+                    <RadzenButton Icon="description" Text="Invoice" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => NavigateToInvoice(s))" Style="margin-left:0.35rem" />
+                    @if (_canRefund && s.Status is not "FullyReturned" and not "Voided")
+                    {
+                        <RadzenButton Icon="undo" Text="Return" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                      Click="@(() => ProcessReturnAsync(s))" Style="margin-left:0.35rem" />
+                    }
+                    @if (_canVoid && s.Status == "Completed")
+                    {
+                        <RadzenButton Icon="block" Text="Void" ButtonStyle="ButtonStyle.Danger" Size="ButtonSize.Small"
+                                      Click="@(() => VoidSaleAsync(s))" Style="margin-left:0.35rem" />
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private IReadOnlyList<SaleListItemDto> _sales = [];
+    private SalesSummaryDto _summary = new();
+    private List<StoreOption> _storeOptions = [];
+
+    private Guid? _storeId;
+    private DateTime? _from = DateTime.Today.AddDays(-29);
+    private DateTime? _to;
+    private string? _search;
+    private bool _loading = true;
+    private bool _canRefund;
+    private bool _canVoid;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private sealed record StoreOption(string Text, Guid? Value);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _canRefund = state.User.HasClaim(Permissions.ClaimType, Permissions.Sales.Refund);
+            _canVoid = state.User.HasClaim(Permissions.ClaimType, Permissions.Sales.Void);
+        }
+
+        var stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeOptions = new List<StoreOption> { new("All stores", null) };
+        _storeOptions.AddRange(stores.Select(s => new StoreOption($"{s.Code} · {s.Name}", s.Id)));
+        if (StoreContext.StoreId is { } selectedStore && stores.Any(s => s.Id == selectedStore))
+        {
+            _storeId = selectedStore;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        // Inclusive end-of-day for the "To" filter; dates are treated as local then sent as UTC.
+        var query = new SalesQueryDto
+        {
+            StoreId = _storeId,
+            FromUtc = _from?.Date.ToUniversalTime(),
+            ToUtc = _to?.Date.AddDays(1).ToUniversalTime(),
+            Search = _search,
+            Take = 200
+        };
+
+        var page = await PosService.GetSalesAsync(query);
+        _sales = page.Sales;
+        _summary = page.Summary;
+        _loading = false;
+    }
+
+    private async Task ViewReceipt(SaleListItemDto sale)
+    {
+        var receipt = await PosService.GetReceiptAsync(sale.Id);
+        if (receipt is null)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Error,
+                Summary = "Not found",
+                Detail = "Receipt could not be loaded.",
+                Duration = 4000
+            });
+            return;
+        }
+
+        await DialogService.OpenAsync<PosReceiptDialog>(
+            $"Receipt · {receipt.SaleNumber}",
+            new Dictionary<string, object?>
+            {
+                [nameof(PosReceiptDialog.Receipt)] = receipt,
+                [nameof(PosReceiptDialog.Reprint)] = true
+            },
+            new DialogOptions { Width = "480px", CloseDialogOnOverlayClick = true });
+    }
+
+    private void NavigateToInvoice(SaleListItemDto sale)
+    {
+        Navigation.NavigateTo($"/invoice/{sale.Id}");
+    }
+
+    private async Task ProcessReturnAsync(SaleListItemDto sale)
+    {
+        var receipt = await DialogService.OpenAsync<SaleReturnDialog>(
+            $"Return · {sale.SaleNumber}",
+            new Dictionary<string, object?> { [nameof(SaleReturnDialog.SaleId)] = sale.Id },
+            new DialogOptions { Width = "720px", CloseDialogOnOverlayClick = false });
+
+        if (receipt is SaleReturnReceiptDto returnReceipt)
+        {
+            await LoadAsync();
+            await DialogService.OpenAsync<SaleReturnReceiptDialog>(
+                "Return complete",
+                new Dictionary<string, object?> { [nameof(SaleReturnReceiptDialog.Receipt)] = returnReceipt },
+                new DialogOptions { Width = "480px", CloseDialogOnOverlayClick = true });
+        }
+    }
+
+    private async Task VoidSaleAsync(SaleListItemDto sale)
+    {
+        var voided = await DialogService.OpenAsync<VoidSaleDialog>(
+            $"Void · {sale.SaleNumber}",
+            new Dictionary<string, object?>
+            {
+                [nameof(VoidSaleDialog.SaleId)] = sale.Id,
+                [nameof(VoidSaleDialog.SaleNumber)] = sale.SaleNumber,
+                [nameof(VoidSaleDialog.TotalAmount)] = sale.TotalAmount
+            },
+            new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = false });
+
+        if (voided is true)
+        {
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Success,
+                Summary = "Sale voided",
+                Detail = $"{sale.SaleNumber} has been voided and stock/cash balances were reversed.",
+                Duration = 4500
+            });
+            await LoadAsync();
+        }
+    }
+}

@@ -1,0 +1,194 @@
+@page "/purchases"
+@attribute [Authorize(Policy = Permissions.Catalog.PurchasesView)]
+@inject IPurchaseService PurchaseService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject ISupplierService SupplierService
+@inject DialogService DialogService
+@inject NotificationService Notifications
+
+<PageTitle>Purchases · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Purchases</h1>
+        <p class="page-subtitle">Goods receiving notes (GRN) — stock in from suppliers.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Text" ValueProperty="Value"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Change="@LoadAsync" Style="min-width:180px" />
+        <RadzenDropDown @bind-Value="_status" Data="@_statusOptions" TextProperty="Text" ValueProperty="Value"
+                        Change="@LoadAsync" Style="min-width:140px" />
+        @if (_canManage)
+        {
+            <RadzenButton Icon="add" Text="New GRN" Click="@NewPurchaseAsync" />
+        }
+    </div>
+</div>
+
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Received GRNs</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="local_shipping" /></span></div>
+        <div class="kpi-value">@_purchases.Count(p => p.Status == "Received")</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Draft orders</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="edit_note" /></span></div>
+        <div class="kpi-value">@_purchases.Count(p => p.Status == "Draft")</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Total purchased</span><span class="kpi-chip chip-sales"><RadzenIcon Icon="payments" /></span></div>
+        <div class="kpi-value">@_purchases.Where(p => p.Status == "Received").Sum(p => p.TotalAmount).ToString("C0")</div>
+    </div>
+</div>
+
+<RadzenCard class="content-card grid-card">
+    <RadzenDataGrid Data="@_purchases" TItem="PurchaseListItemDto" AllowSorting="true" AllowPaging="true"
+                    PageSize="12" EmptyText="No purchases found." IsLoading="@_loading">
+        <Columns>
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Property="PurchaseNumber" Title="GRN #" Width="170px" />
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Property="SupplierName" Title="Supplier" />
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Property="StoreName" Title="Store" />
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Property="Status" Title="Status" Width="110px">
+                <Template Context="p">
+                    <span class="status-pill @(p.Status == "Received" ? "on" : p.Status == "Draft" ? "" : "off")">@p.Status</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Property="LineCount" Title="Lines" Width="80px" TextAlign="TextAlign.Center" />
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Property="TotalAmount" Title="Total" Width="130px" TextAlign="TextAlign.End">
+                <Template Context="p"><strong>@p.TotalAmount.ToString("C2")</strong></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Property="ReceivedOn" Title="Date" Width="160px">
+                <Template Context="p">@((p.ReceivedOn ?? p.OrderedOn)?.ToLocalTime().ToString("dd MMM yyyy · h:mm tt") ?? "—")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="PurchaseListItemDto" Title="" Width="200px" Sortable="false" TextAlign="TextAlign.End">
+                <Template Context="p">
+                    <RadzenButton Icon="visibility" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@(() => ViewAsync(p))" />
+                    @if (_canManage && p.Status == "Draft")
+                    {
+                        <RadzenButton Icon="local_shipping" Text="Receive" ButtonStyle="ButtonStyle.Primary" Size="ButtonSize.Small"
+                                      Click="@(() => ReceiveAsync(p))" Style="margin-left:0.35rem" />
+                        <RadzenButton Icon="close" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                      Click="@(() => CancelAsync(p))" Style="margin-left:0.35rem" />
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private IReadOnlyList<PurchaseListItemDto> _purchases = [];
+    private List<StoreOption> _storeOptions = [new("All stores", null)];
+    private List<StatusOption> _statusOptions =
+    [
+        new("All statuses", null),
+        new("Draft", "Draft"),
+        new("Received", "Received"),
+        new("Cancelled", "Cancelled")
+    ];
+    private Guid? _storeId;
+    private string? _status;
+    private bool _loading = true;
+    private bool _canManage;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private sealed record StoreOption(string Text, Guid? Value);
+    private sealed record StatusOption(string Text, string? Value);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _canManage = state.User.HasClaim(Permissions.ClaimType, Permissions.Catalog.PurchasesManage);
+        }
+
+        var stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeOptions.AddRange(stores.Select(s => new StoreOption($"{s.Code} · {s.Name}", s.Id)));
+        if (StoreContext.StoreId is { } selectedStore && stores.Any(s => s.Id == selectedStore))
+        {
+            _storeId = selectedStore;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        _purchases = await PurchaseService.GetAllAsync(new PurchaseQueryDto
+        {
+            StoreId = _storeId,
+            Status = _status,
+            Take = 200
+        });
+        _loading = false;
+    }
+
+    private async Task NewPurchaseAsync()
+    {
+        var saved = await DialogService.OpenAsync<PurchaseDialog>(
+            "New goods receiving (GRN)",
+            new Dictionary<string, object?>(),
+            new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = false });
+
+        if (saved is true)
+        {
+            await LoadAsync();
+            Notify("Saved", "Purchase recorded.", NotificationSeverity.Success);
+        }
+    }
+
+    private async Task ViewAsync(PurchaseListItemDto p)
+    {
+        var detail = await PurchaseService.GetAsync(p.Id);
+        await DialogService.OpenAsync<PurchaseDetailDialog>(
+            $"GRN · {p.PurchaseNumber}",
+            new Dictionary<string, object?> { [nameof(PurchaseDetailDialog.Detail)] = detail },
+            new DialogOptions { Width = "680px", CloseDialogOnOverlayClick = true });
+    }
+
+    private async Task ReceiveAsync(PurchaseListItemDto p)
+    {
+        if (await DialogService.Confirm($"Receive goods for {p.PurchaseNumber}? Stock will be updated.", "Receive GRN",
+                new ConfirmOptions { OkButtonText = "Receive" }) != true)
+        {
+            return;
+        }
+
+        var result = await PurchaseService.ReceiveAsync(p.Id);
+        if (result.Succeeded)
+        {
+            await LoadAsync();
+            Notify("Received", "Stock updated.", NotificationSeverity.Success);
+        }
+        else
+        {
+            Notify("Failed", result.Error ?? "Could not receive.", NotificationSeverity.Error);
+        }
+    }
+
+    private async Task CancelAsync(PurchaseListItemDto p)
+    {
+        if (await DialogService.Confirm($"Cancel draft {p.PurchaseNumber}?", "Cancel", new ConfirmOptions { OkButtonText = "Cancel GRN" }) != true)
+        {
+            return;
+        }
+
+        var result = await PurchaseService.CancelAsync(p.Id);
+        if (result.Succeeded)
+        {
+            await LoadAsync();
+        }
+        else
+        {
+            Notify("Failed", result.Error ?? "Could not cancel.", NotificationSeverity.Error);
+        }
+    }
+
+    private void Notify(string summary, string detail, NotificationSeverity severity) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4000 });
+}

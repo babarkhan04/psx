@@ -1,0 +1,146 @@
+@page "/setup/registers"
+@attribute [Authorize(Policy = Permissions.Setup.RegistersView)]
+@inject IRegisterService RegisterService
+@inject IStoreService StoreService
+@inject DialogService DialogService
+@inject NotificationService Notifications
+
+<PageTitle>Registers · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Registers</h1>
+        <p class="page-subtitle">Point-of-sale terminals and cash drawers, organized by store.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown TValue="Guid?" @bind-Value="_storeFilter" Data="@_storeFilterOptions"
+                        TextProperty="Name" ValueProperty="Id" Change="@LoadAsync"
+                        Style="min-width:220px" />
+        <RadzenButton Icon="add" Text="New register" Click="@(() => OpenEditor(null))"
+                      Disabled="@(!_canManage || _stores.Count == 0)" />
+    </div>
+</div>
+
+<RadzenCard class="content-card grid-card">
+    <RadzenDataGrid Data="@_registers" TItem="RegisterDto" AllowFiltering="true" AllowSorting="true"
+                    AllowPaging="true" PageSize="10" FilterMode="FilterMode.Simple"
+                    EmptyText="No registers yet." IsLoading="@_loading">
+        <Columns>
+            <RadzenDataGridColumn TItem="RegisterDto" Property="StoreName" Title="Store" />
+            <RadzenDataGridColumn TItem="RegisterDto" Property="Code" Title="Code" Width="110px" />
+            <RadzenDataGridColumn TItem="RegisterDto" Property="Name" Title="Name" />
+            <RadzenDataGridColumn TItem="RegisterDto" Property="Location" Title="Location" />
+            <RadzenDataGridColumn TItem="RegisterDto" Property="HasCashDrawer" Title="Cash drawer" Width="120px" TextAlign="TextAlign.Center">
+                <Template Context="reg">
+                    <RadzenIcon Icon="@(reg.HasCashDrawer ? "check_circle" : "remove")"
+                                Style="@(reg.HasCashDrawer ? "color:#059669" : "color:#94a3b8")" />
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="RegisterDto" Property="IsActive" Title="Status" Width="120px" TextAlign="TextAlign.Center">
+                <Template Context="reg">
+                    <span class="status-pill @(reg.IsActive ? "on" : "off")">@(reg.IsActive ? "Active" : "Inactive")</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="RegisterDto" Title="" Width="140px" Sortable="false" Filterable="false" TextAlign="TextAlign.End">
+                <Template Context="reg">
+                    <RadzenButton Icon="edit" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => OpenEditor(reg))" Disabled="@(!_canManage)" />
+                    <RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => DeleteAsync(reg))" Disabled="@(!_canManage)" Style="margin-left:0.35rem" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private IReadOnlyList<RegisterDto> _registers = [];
+    private IReadOnlyList<StoreDto> _stores = [];
+    private List<StoreDto> _storeFilterOptions = [];
+    private Guid? _storeFilter;
+    private bool _loading = true;
+    private bool _canManage;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _canManage = state.User.HasClaim(Permissions.ClaimType, Permissions.Setup.RegistersManage);
+        }
+
+        _stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeFilterOptions = new List<StoreDto> { new() { Id = Guid.Empty, Name = "All stores" } };
+        _storeFilterOptions.AddRange(_stores);
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        var filter = _storeFilter is null || _storeFilter == Guid.Empty ? (Guid?)null : _storeFilter;
+        _registers = await RegisterService.GetAllAsync(filter);
+        _loading = false;
+    }
+
+    private async Task OpenEditor(RegisterDto? reg)
+    {
+        if (!_canManage)
+        {
+            return;
+        }
+
+        var model = reg is null
+            ? new RegisterDto { StoreId = _stores.FirstOrDefault()?.Id ?? Guid.Empty, HasCashDrawer = true, IsActive = true }
+            : new RegisterDto
+            {
+                Id = reg.Id, StoreId = reg.StoreId, Code = reg.Code, Name = reg.Name,
+                Location = reg.Location, PrinterName = reg.PrinterName,
+                HasCashDrawer = reg.HasCashDrawer, IsActive = reg.IsActive
+            };
+
+        var saved = await DialogService.OpenAsync<RegisterDialog>(
+            reg is null ? "New register" : $"Edit · {reg.Name}",
+            new Dictionary<string, object>
+            {
+                [nameof(RegisterDialog.Model)] = model,
+                [nameof(RegisterDialog.Stores)] = _stores
+            },
+            new DialogOptions { Width = "680px", CloseDialogOnOverlayClick = false });
+
+        if (saved is true)
+        {
+            await LoadAsync();
+            Notify("Saved", "Register saved successfully.", NotificationSeverity.Success);
+        }
+    }
+
+    private async Task DeleteAsync(RegisterDto reg)
+    {
+        var confirmed = await DialogService.Confirm(
+            $"Delete register '{reg.Name}'?", "Delete register",
+            new ConfirmOptions { OkButtonText = "Delete", CancelButtonText = "Cancel" });
+
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        var result = await RegisterService.DeleteAsync(reg.Id);
+        if (result.Succeeded)
+        {
+            await LoadAsync();
+            Notify("Deleted", "Register removed.", NotificationSeverity.Success);
+        }
+        else
+        {
+            Notify("Could not delete", result.Error ?? "Unknown error", NotificationSeverity.Error);
+        }
+    }
+
+    private void Notify(string summary, string detail, NotificationSeverity severity) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4000 });
+}

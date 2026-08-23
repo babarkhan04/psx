@@ -1,0 +1,55 @@
+@inject IShiftService ShiftService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="NoSaleDrawerDto" Data="@Model" Submit="@OnSubmit">
+    <RadzenStack Gap="1rem">
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" AllowClose="false">
+            This will record that the cash drawer was opened without a sale. A reason is required for audit.
+        </RadzenAlert>
+
+        <RadzenFormField Text="Reason" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea Name="Reason" @bind-Value="Model.Reason" Rows="3" Placeholder="Example: Change request, cash check, manager inspection..." />
+        </RadzenFormField>
+        <RadzenRequiredValidator Component="Reason" Text="Reason is required." Popup="false" />
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="lock_open" Text="Record no-sale open" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public Guid ShiftId { get; set; }
+
+    private NoSaleDrawerDto Model = new();
+    private bool _saving;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        Model.ShiftId = ShiftId;
+    }
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+        var result = await ShiftService.RecordNoSaleDrawerAsync(Model);
+        _saving = false;
+
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

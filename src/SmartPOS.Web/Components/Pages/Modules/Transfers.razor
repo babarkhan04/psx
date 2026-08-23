@@ -1,0 +1,329 @@
+@page "/transfers"
+@attribute [Authorize(Policy = Permissions.Catalog.TransfersView)]
+@inject IStockTransferService TransferService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject IProductService ProductService
+@inject NotificationService Notifications
+@inject DialogService DialogService
+
+<PageTitle>Stock Transfers · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Stock Transfers</h1>
+        <p class="page-subtitle">Move stock from one store to another with approval, dispatch, receive, and ledger entries.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown TValue="Guid?" @bind-Value="_filterStoreId" Data="@_storeOptions"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        TextProperty="Name" ValueProperty="Id" Change="@(_ => LoadAsync())"
+                        Style="min-width:220px" Placeholder="All stores" />
+        <RadzenDropDown TValue="string" @bind-Value="_filterStatus" Data="@_statusOptions"
+                        Change="@(_ => LoadAsync())" Style="min-width:170px" />
+        <RadzenButton Icon="refresh" Text="Refresh" Click="@LoadAsync" />
+    </div>
+</div>
+
+<RadzenCard class="content-card" Style="margin-bottom:1rem">
+    <h3 style="margin-top:0">Create transfer request</h3>
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+        <div>
+            <RadzenLabel Text="Source store" />
+            <RadzenDropDown TValue="Guid" @bind-Value="_sourceStoreId" Data="@_stores"
+                            TextProperty="Name" ValueProperty="Id" Style="width:240px" />
+        </div>
+        <div>
+            <RadzenLabel Text="Destination store" />
+            <RadzenDropDown TValue="Guid" @bind-Value="_destinationStoreId" Data="@_stores"
+                            TextProperty="Name" ValueProperty="Id" Style="width:240px" />
+        </div>
+        <div style="flex:1;min-width:240px">
+            <RadzenLabel Text="Notes" />
+            <RadzenTextBox @bind-Value="_notes" Style="width:100%" Placeholder="Optional" />
+        </div>
+    </RadzenStack>
+
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap" Style="margin-top:1rem">
+        <div style="min-width:300px">
+            <RadzenLabel Text="Product" />
+            <RadzenDropDown TValue="Guid" @bind-Value="_selectedProductId" Data="@_products"
+                            TextProperty="Name" ValueProperty="Id" AllowFiltering="true"
+                            FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                            Style="width:100%" Placeholder="Select product" />
+        </div>
+        <div>
+            <RadzenLabel Text="Quantity" />
+            <RadzenNumeric TValue="decimal" @bind-Value="_selectedQuantity" Style="width:150px" />
+        </div>
+        <RadzenButton Icon="add" Text="Add line" Click="@AddLine" Disabled="@(_selectedProductId == Guid.Empty || _selectedQuantity <= 0)" />
+    </RadzenStack>
+
+    <RadzenDataGrid Data="@_newLines" TItem="CreateTransferLineVm" EmptyText="No lines added." Style="margin-top:1rem">
+        <Columns>
+            <RadzenDataGridColumn TItem="CreateTransferLineVm" Property="Sku" Title="SKU" Width="130px" />
+            <RadzenDataGridColumn TItem="CreateTransferLineVm" Property="ProductName" Title="Product" />
+            <RadzenDataGridColumn TItem="CreateTransferLineVm" Property="Quantity" Title="Qty" Width="120px" TextAlign="TextAlign.End" />
+            <RadzenDataGridColumn TItem="CreateTransferLineVm" Title="" Width="80px" TextAlign="TextAlign.Center">
+                <Template Context="line">
+                    <RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Danger" Size="ButtonSize.Small" Click="@(() => RemoveLine(line))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Style="margin-top:1rem">
+        <RadzenButton Icon="send" Text="Create request" ButtonStyle="ButtonStyle.Primary"
+                      Click="@CreateRequestAsync" Disabled="@(_busy || _newLines.Count == 0)" />
+    </RadzenStack>
+</RadzenCard>
+
+<RadzenCard class="content-card">
+    <RadzenDataGrid Data="@_transfers" TItem="StockTransferListItemDto" AllowPaging="true" AllowSorting="true"
+                    PageSize="10" IsLoading="@_loading" EmptyText="No transfers found.">
+        <Columns>
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="TransferNumber" Title="Transfer #" Width="170px" />
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="RequestedOn" Title="Requested" Width="150px">
+                <Template Context="t">@t.RequestedOn.ToLocalTime().ToString("g")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="SourceStoreName" Title="From" />
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="DestinationStoreName" Title="To" />
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="Status" Title="Status" Width="130px">
+                <Template Context="t"><span class="status-pill on">@t.Status</span></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="TotalRequested" Title="Requested" Width="110px" TextAlign="TextAlign.End" />
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="TotalDispatched" Title="Dispatched" Width="115px" TextAlign="TextAlign.End" />
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Property="TotalReceived" Title="Received" Width="105px" TextAlign="TextAlign.End" />
+            <RadzenDataGridColumn TItem="StockTransferListItemDto" Title="Actions" Width="330px" TextAlign="TextAlign.Center">
+                <Template Context="t">
+                    <RadzenButton Text="View" Size="ButtonSize.Small" Icon="visibility" Click="@(() => ViewAsync(t.Id))" Style="margin-right:0.25rem" />
+                    <RadzenButton Text="Approve" Size="ButtonSize.Small" Icon="check" ButtonStyle="ButtonStyle.Success"
+                                  Disabled="@(t.Status != "Requested")" Click="@(() => ApproveAsync(t.Id))" Style="margin-right:0.25rem" />
+                    <RadzenButton Text="Dispatch" Size="ButtonSize.Small" Icon="local_shipping" ButtonStyle="ButtonStyle.Warning"
+                                  Disabled="@(t.Status != "Approved")" Click="@(() => DispatchAsync(t.Id))" Style="margin-right:0.25rem" />
+                    <RadzenButton Text="Receive" Size="ButtonSize.Small" Icon="move_to_inbox" ButtonStyle="ButtonStyle.Primary"
+                                  Disabled="@(t.Status != "Dispatched" && t.Status != "PartiallyReceived")" Click="@(() => ReceiveAllAsync(t.Id))" Style="margin-right:0.25rem" />
+                    <RadzenButton Text="Cancel" Size="ButtonSize.Small" Icon="close" ButtonStyle="ButtonStyle.Danger"
+                                  Disabled="@(t.Status != "Requested" && t.Status != "Approved")" Click="@(() => CancelAsync(t.Id))" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@if (_selectedTransfer is not null)
+{
+    <RadzenCard class="content-card" Style="margin-top:1rem">
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center">
+            <div>
+                <h3 style="margin:0">@_selectedTransfer.TransferNumber</h3>
+                <p class="page-subtitle" style="margin:0.25rem 0 0 0">
+                    @_selectedTransfer.SourceStoreName → @_selectedTransfer.DestinationStoreName · @_selectedTransfer.Status
+                </p>
+            </div>
+            <RadzenButton Icon="close" Text="Close details" Click="@(() => _selectedTransfer = null)" />
+        </RadzenStack>
+
+        <RadzenDataGrid Data="@_selectedTransfer.Lines" TItem="StockTransferLineDto" Style="margin-top:1rem">
+            <Columns>
+                <RadzenDataGridColumn TItem="StockTransferLineDto" Property="Sku" Title="SKU" Width="130px" />
+                <RadzenDataGridColumn TItem="StockTransferLineDto" Property="ProductName" Title="Product" />
+                <RadzenDataGridColumn TItem="StockTransferLineDto" Property="QuantityRequested" Title="Requested" Width="110px" TextAlign="TextAlign.End" />
+                <RadzenDataGridColumn TItem="StockTransferLineDto" Property="QuantityDispatched" Title="Dispatched" Width="120px" TextAlign="TextAlign.End" />
+                <RadzenDataGridColumn TItem="StockTransferLineDto" Property="QuantityReceived" Title="Received" Width="110px" TextAlign="TextAlign.End" />
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenCard>
+}
+
+@code {
+    private IReadOnlyList<StoreDto> _stores = [];
+    private List<LookupDto> _storeOptions = [];
+    private IReadOnlyList<ProductListItemDto> _products = [];
+    private IReadOnlyList<StockTransferListItemDto> _transfers = [];
+    private StockTransferDetailDto? _selectedTransfer;
+
+    private readonly List<CreateTransferLineVm> _newLines = [];
+    private Guid _sourceStoreId;
+    private Guid _destinationStoreId;
+    private Guid _selectedProductId;
+    private decimal _selectedQuantity = 1;
+    private string? _notes;
+    private Guid? _filterStoreId;
+    private string _filterStatus = "All";
+    private bool _loading;
+    private bool _busy;
+
+    private readonly List<string> _statusOptions = ["All", "Requested", "Approved", "Dispatched", "PartiallyReceived", "Received", "Cancelled"];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeOptions = [new LookupDto { Id = Guid.Empty, Name = "All stores" }, .._stores.Select(s => new LookupDto { Id = s.Id, Name = $"{s.Code} · {s.Name}" })];
+        _products = await ProductService.GetAllAsync();
+
+        if (_stores.Count > 0)
+        {
+            var selectedStore = StoreContext.StoreId is { } id && _stores.Any(s => s.Id == id) ? id : _stores[0].Id;
+            _filterStoreId = selectedStore;
+            _sourceStoreId = selectedStore;
+            _destinationStoreId = _stores.FirstOrDefault(s => s.Id != selectedStore)?.Id ?? selectedStore;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _transfers = await TransferService.GetTransfersAsync(new StockTransferQueryDto
+        {
+            StoreId = _filterStoreId is { } id && id != Guid.Empty ? id : null,
+            Status = _filterStatus == "All" ? null : _filterStatus,
+            Take = 200
+        });
+        _loading = false;
+    }
+
+    private void AddLine()
+    {
+        var product = _products.FirstOrDefault(p => p.Id == _selectedProductId);
+        if (product is null || _selectedQuantity <= 0)
+        {
+            return;
+        }
+
+        var existing = _newLines.FirstOrDefault(l => l.ProductId == product.Id);
+        if (existing is not null)
+        {
+            existing.Quantity += _selectedQuantity;
+        }
+        else
+        {
+            _newLines.Add(new CreateTransferLineVm
+            {
+                ProductId = product.Id,
+                Sku = product.Sku,
+                ProductName = product.Name,
+                Quantity = _selectedQuantity
+            });
+        }
+
+        _selectedProductId = Guid.Empty;
+        _selectedQuantity = 1;
+    }
+
+    private void RemoveLine(CreateTransferLineVm line) => _newLines.Remove(line);
+
+    private async Task CreateRequestAsync()
+    {
+        if (_sourceStoreId == Guid.Empty || _destinationStoreId == Guid.Empty || _sourceStoreId == _destinationStoreId)
+        {
+            Notify(NotificationSeverity.Warning, "Invalid stores", "Select different source and destination stores.");
+            return;
+        }
+
+        _busy = true;
+        var result = await TransferService.CreateRequestedAsync(new CreateStockTransferDto
+        {
+            SourceStoreId = _sourceStoreId,
+            DestinationStoreId = _destinationStoreId,
+            Notes = _notes,
+            Lines = _newLines.Select(l => new CreateStockTransferLineDto
+            {
+                ProductId = l.ProductId,
+                Quantity = l.Quantity
+            }).ToList()
+        });
+        _busy = false;
+
+        if (!result.Succeeded)
+        {
+            Notify(NotificationSeverity.Error, "Transfer not created", result.Error ?? "Unable to create transfer.");
+            return;
+        }
+
+        _newLines.Clear();
+        _notes = null;
+        Notify(NotificationSeverity.Success, "Transfer requested", "Stock transfer request created.");
+        await LoadAsync();
+    }
+
+    private async Task ViewAsync(Guid transferId)
+    {
+        _selectedTransfer = await TransferService.GetTransferAsync(transferId);
+    }
+
+    private async Task ApproveAsync(Guid transferId)
+    {
+        await RunActionAsync(() => TransferService.ApproveAsync(new StockTransferActionDto { TransferId = transferId }), "Transfer approved");
+    }
+
+    private async Task DispatchAsync(Guid transferId)
+    {
+        await RunActionAsync(() => TransferService.DispatchAsync(new StockTransferActionDto { TransferId = transferId }), "Transfer dispatched and source stock reduced");
+    }
+
+    private async Task ReceiveAllAsync(Guid transferId)
+    {
+        var transfer = await TransferService.GetTransferAsync(transferId);
+        if (transfer is null)
+        {
+            return;
+        }
+
+        var dto = new ReceiveStockTransferDto
+        {
+            TransferId = transferId,
+            Lines = transfer.Lines.Select(l => new ReceiveStockTransferLineDto
+            {
+                LineId = l.Id,
+                QuantityReceived = l.QuantityDispatched - l.QuantityReceived
+            }).Where(l => l.QuantityReceived > 0).ToList()
+        };
+
+        await RunActionAsync(() => TransferService.ReceiveAsync(dto), "Transfer received and destination stock increased");
+    }
+
+    private async Task CancelAsync(Guid transferId)
+    {
+        var confirmed = await DialogService.Confirm("Cancel this transfer request? Dispatched transfers cannot be cancelled.", "Cancel transfer");
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        await RunActionAsync(() => TransferService.CancelAsync(new StockTransferActionDto { TransferId = transferId, Notes = "Cancelled by user" }), "Transfer cancelled");
+    }
+
+    private async Task RunActionAsync(Func<Task<Result>> action, string successMessage)
+    {
+        _busy = true;
+        var result = await action();
+        _busy = false;
+
+        if (!result.Succeeded)
+        {
+            Notify(NotificationSeverity.Error, "Action failed", result.Error ?? "Unable to complete action.");
+            return;
+        }
+
+        Notify(NotificationSeverity.Success, "Done", successMessage);
+        await LoadAsync();
+        if (_selectedTransfer is not null)
+        {
+            _selectedTransfer = await TransferService.GetTransferAsync(_selectedTransfer.Id);
+        }
+    }
+
+    private void Notify(NotificationSeverity severity, string summary, string detail) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4000 });
+
+    private sealed class CreateTransferLineVm
+    {
+        public Guid ProductId { get; set; }
+        public string Sku { get; set; } = string.Empty;
+        public string ProductName { get; set; } = string.Empty;
+        public decimal Quantity { get; set; }
+    }
+}

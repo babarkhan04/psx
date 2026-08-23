@@ -1,0 +1,162 @@
+@inject IPurchaseService PurchaseService
+@inject ISupplierService SupplierService
+@inject IStoreService StoreService
+@inject IProductService ProductService
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    <RadzenRow Gap="1rem">
+        <RadzenColumn Size="12" SizeMD="6">
+            <RadzenFormField Text="Store" Variant="Variant.Outlined" Style="width:100%">
+                <RadzenDropDown @bind-Value="_storeId" Data="@_stores" TextProperty="Name" ValueProperty="Id" Style="width:100%" />
+            </RadzenFormField>
+        </RadzenColumn>
+        <RadzenColumn Size="12" SizeMD="6">
+            <RadzenFormField Text="Supplier" Variant="Variant.Outlined" Style="width:100%">
+                <RadzenDropDown @bind-Value="_supplierId" Data="@_suppliers" TextProperty="Display" ValueProperty="Id"
+                                AllowFiltering="true" Style="width:100%" Placeholder="Select supplier" />
+            </RadzenFormField>
+        </RadzenColumn>
+    </RadzenRow>
+
+    <div class="toolbar-actions" style="justify-content:flex-start">
+        <RadzenDropDown @bind-Value="_addProductId" Data="@_products" TextProperty="Name" ValueProperty="Id"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Placeholder="Add product…" Style="min-width:280px" />
+        <RadzenButton Icon="add" Text="Add line" ButtonStyle="ButtonStyle.Light" Click="@AddLine" Disabled="@(_addProductId == Guid.Empty)" />
+    </div>
+
+    <RadzenDataGrid Data="@_lines" TItem="LineRow" AllowPaging="false">
+        <Columns>
+            <RadzenDataGridColumn TItem="LineRow" Property="Sku" Title="SKU" Width="120px" />
+            <RadzenDataGridColumn TItem="LineRow" Property="Name" Title="Product" />
+            <RadzenDataGridColumn TItem="LineRow" Title="Qty" Width="120px">
+                <Template Context="l"><RadzenNumeric @bind-Value="l.Quantity" Min="0.001m" Style="width:100%" /></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LineRow" Title="Unit cost (Rs)" Width="140px">
+                <Template Context="l"><RadzenNumeric @bind-Value="l.UnitCost" Min="0m" Style="width:100%" /></Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LineRow" Title="Line total" Width="120px" TextAlign="TextAlign.End">
+                <Template Context="l">@((l.Quantity * l.UnitCost).ToString("C2"))</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="LineRow" Title="" Width="60px">
+                <Template Context="l"><RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@(() => RemoveLine(l))" /></Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+
+    <div class="pos-total-due"><span>Estimated total</span><span>@_lines.Sum(l => l.Quantity * l.UnitCost).ToString("C2")</span></div>
+
+    <RadzenFormField Text="Notes" Variant="Variant.Outlined" Style="width:100%">
+        <RadzenTextArea @bind-Value="_notes" Rows="2" />
+    </RadzenFormField>
+
+    @if (_error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+        <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+        <RadzenButton Icon="save" Text="Save draft" ButtonStyle="ButtonStyle.Secondary" IsBusy="@_saving" Click="@(() => SubmitAsync(false))" />
+        <RadzenButton Icon="local_shipping" Text="Receive goods" ButtonStyle="ButtonStyle.Primary" IsBusy="@_saving" Click="@(() => SubmitAsync(true))" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    private Guid _storeId;
+    private Guid _supplierId;
+    private Guid _addProductId;
+    private string? _notes;
+    private string? _error;
+    private bool _saving;
+
+    private List<StoreDto> _stores = [];
+    private List<SupplierLookupDto> _suppliers = [];
+    private List<ProductListItemDto> _products = [];
+    private List<LineRow> _lines = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _stores = (await StoreService.GetAllAsync(includeInactive: false)).ToList();
+        _suppliers = (await SupplierService.GetLookupAsync()).ToList();
+        _products = (await ProductService.GetAllAsync()).Where(p => p.IsActive).ToList();
+        _storeId = _stores.FirstOrDefault()?.Id ?? Guid.Empty;
+    }
+
+    private void AddLine()
+    {
+        var product = _products.FirstOrDefault(p => p.Id == _addProductId);
+        if (product is null || _lines.Any(l => l.ProductId == product.Id))
+        {
+            return;
+        }
+
+        _lines.Add(new LineRow
+        {
+            ProductId = product.Id,
+            Sku = product.Sku,
+            Name = product.Name,
+            Quantity = 1,
+            UnitCost = product.CostPrice > 0 ? product.CostPrice : product.SellPrice * 0.7m
+        });
+        _addProductId = Guid.Empty;
+    }
+
+    private void RemoveLine(LineRow line) => _lines.Remove(line);
+
+    private async Task SubmitAsync(bool receive)
+    {
+        if (_storeId == Guid.Empty || _supplierId == Guid.Empty)
+        {
+            _error = "Select a store and supplier.";
+            return;
+        }
+
+        if (_lines.Count == 0)
+        {
+            _error = "Add at least one product line.";
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+
+        var dto = new PurchaseEditDto
+        {
+            StoreId = _storeId,
+            SupplierId = _supplierId,
+            Notes = _notes,
+            Lines = _lines.Select(l => new PurchaseLineInputDto
+            {
+                ProductId = l.ProductId,
+                Quantity = l.Quantity,
+                UnitCost = l.UnitCost
+            }).ToList()
+        };
+
+        var result = receive
+            ? await PurchaseService.CreateAndReceiveAsync(dto)
+            : await PurchaseService.CreateDraftAsync(dto);
+
+        _saving = false;
+
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+
+    private sealed class LineRow
+    {
+        public Guid ProductId { get; set; }
+        public string Sku { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public decimal Quantity { get; set; }
+        public decimal UnitCost { get; set; }
+    }
+}

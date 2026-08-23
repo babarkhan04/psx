@@ -1,0 +1,498 @@
+@page "/reports"
+@attribute [Authorize(Policy = Permissions.Insights.ReportsView)]
+@inject IReportService ReportService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject DialogService DialogService
+
+<PageTitle>Advanced Reports · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Advanced Reports &amp; Analytics</h1>
+        <p class="page-subtitle">Sales, profit, discounts, cash, inventory, transfers, customers, purchases, and tax insights.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Text" ValueProperty="Value"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Change="@LoadAsync" Style="min-width:220px" />
+        <RadzenButton Text="Today" ButtonStyle="ButtonStyle.Light" Click="@(() => SetPresetAsync(0))" />
+        <RadzenButton Text="7d" ButtonStyle="ButtonStyle.Light" Click="@(() => SetPresetAsync(6))" />
+        <RadzenButton Text="30d" ButtonStyle="ButtonStyle.Light" Click="@(() => SetPresetAsync(29))" />
+        <RadzenDatePicker @bind-Value="_from" DateFormat="dd MMM yyyy" Change="@LoadAsync" Style="width:155px" ShowTime="false" />
+        <RadzenDatePicker @bind-Value="_to" DateFormat="dd MMM yyyy" Change="@LoadAsync" Style="width:155px" ShowTime="false" />
+        <RadzenButton Icon="refresh" Text="Refresh" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" />
+        <a href="@ExportUrl" class="rz-button rz-button-light report-export-button" style="text-decoration:none;display:inline-flex;align-items:center;gap:0.35rem">
+            <RadzenIcon Icon="download" /> Export Excel
+        </a>
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="customer-ledger-loading"><RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" /></div>
+}
+else if (_report is not null)
+{
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Net sales</span><span class="kpi-chip chip-sales"><RadzenIcon Icon="payments" /></span></div>
+            <div class="kpi-value">@Money0(_report.SalesSummary.NetSales)</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Gross profit</span><span class="kpi-chip chip-cash"><RadzenIcon Icon="trending_up" /></span></div>
+            <div class="kpi-value">@Money0(_report.SalesSummary.GrossProfit)</div>
+            <div class="page-subtitle">Margin @_report.SalesSummary.MarginPercent.ToString("0.#")%</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Discounts</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="percent" /></span></div>
+            <div class="kpi-value">@Money0(_report.SalesSummary.DiscountTotal)</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Avg basket</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="shopping_cart" /></span></div>
+            <div class="kpi-value">@Money0(_report.SalesSummary.AverageBasket)</div>
+            <div class="page-subtitle">@_report.SalesSummary.TransactionCount txns · @_report.SalesSummary.VoidCount voids</div>
+        </div>
+    </div>
+
+    <RadzenTabs>
+        <Tabs>
+            <RadzenTabsItem Text="Executive">
+                <div class="kpi-grid" style="margin-bottom:1rem">
+                    <div class="kpi-card"><div class="kpi-label">Gross sales</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.SalesSummary.GrossSales)</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Returns</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.SalesSummary.ReturnsTotal)</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Tax collected</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.SalesSummary.TaxCollected)</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Purchases</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Purchases.TotalPurchased)</div></div>
+                </div>
+
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Daily sales trend</h3>
+                    <RadzenDataGrid Data="@_report.DailySales" TItem="DailySalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="Date" Title="Date" Width="135px">
+                                <Template Context="d">@d.Date.ToString("dd MMM yyyy")</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="Transactions" Title="Txns" Width="80px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="GrossSales" Title="Gross" TextAlign="TextAlign.End"><Template Context="d">@Money(d.GrossSales)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="Discounts" Title="Discounts" TextAlign="TextAlign.End"><Template Context="d">@Money(d.Discounts)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="Returns" Title="Returns" TextAlign="TextAlign.End"><Template Context="d">@Money(d.Returns)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="NetSales" Title="Net" TextAlign="TextAlign.End"><Template Context="d"><strong>@Money(d.NetSales)</strong></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="GrossProfit" Title="Profit" TextAlign="TextAlign.End"><Template Context="d"><span class="@(d.GrossProfit >= 0 ? "text-ok" : "text-warn")">@Money(d.GrossProfit)</span></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="MarginPercent" Title="Margin" Width="90px" TextAlign="TextAlign.End"><Template Context="d">@Pct(d.MarginPercent)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DailySalesRowDto" Property="VoidCount" Title="Voids" Width="80px" TextAlign="TextAlign.Center" />
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Sales">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Sales by store</h3>
+                    <RadzenDataGrid Data="@_report.SalesByStore" TItem="StoreSalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="Transactions" Title="Txns" Width="90px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="GrossSales" Title="Gross" TextAlign="TextAlign.End"><Template Context="s">@Money(s.GrossSales)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="Returns" Title="Returns" TextAlign="TextAlign.End"><Template Context="s">@Money(s.Returns)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="NetSales" Title="Net" TextAlign="TextAlign.End"><Template Context="s"><strong>@Money(s.NetSales)</strong></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="GrossProfit" Title="Profit" TextAlign="TextAlign.End"><Template Context="s">@Money(s.GrossProfit)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="MarginPercent" Title="Margin" Width="90px" TextAlign="TextAlign.End"><Template Context="s">@Pct(s.MarginPercent)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StoreSalesRowDto" Title="" Width="75px" Sortable="false" TextAlign="TextAlign.Center">
+                                <Template Context="s"><RadzenButton Icon="insights" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => ShowStoreInsightAsync(s))" /></Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+
+                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
+                    <h3 style="margin-top:0">Sales by cashier</h3>
+                    <RadzenDataGrid Data="@_report.SalesByCashier" TItem="CashierSalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="CashierName" Title="Cashier" />
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="Transactions" Title="Txns" Width="80px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="VoidCount" Title="Voids" Width="80px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="ReturnCount" Title="Returns" Width="90px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="Discounts" Title="Discounts" TextAlign="TextAlign.End"><Template Context="c">@Money(c.Discounts)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="NetSales" Title="Net sales" TextAlign="TextAlign.End"><Template Context="c"><strong>@Money(c.NetSales)</strong></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="AverageBasket" Title="Avg basket" TextAlign="TextAlign.End"><Template Context="c">@Money(c.AverageBasket)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierSalesRowDto" Title="" Width="75px" Sortable="false" TextAlign="TextAlign.Center">
+                                <Template Context="c"><RadzenButton Icon="insights" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => ShowCashierInsightAsync(c))" /></Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+
+                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
+                    <h3 style="margin-top:0">Hourly sales</h3>
+                    <RadzenDataGrid Data="@_report.HourlySales" TItem="HourlySalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="HourlySalesRowDto" Property="HourLabel" Title="Hour" />
+                            <RadzenDataGridColumn TItem="HourlySalesRowDto" Property="Transactions" Title="Txns" Width="90px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="HourlySalesRowDto" Property="NetSales" Title="Net sales" TextAlign="TextAlign.End"><Template Context="h">@Money(h.NetSales)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="HourlySalesRowDto" Property="AverageBasket" Title="Avg basket" TextAlign="TextAlign.End"><Template Context="h">@Money(h.AverageBasket)</Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Products & Profit">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Product profitability</h3>
+                    <RadzenDataGrid Data="@_report.TopProducts" TItem="ProductSalesRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="Sku" Title="SKU" Width="120px" />
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="ProductName" Title="Product" />
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="CategoryName" Title="Category" Width="150px" />
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="BrandName" Title="Brand" Width="140px" />
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="NetQuantity" Title="Net qty" Width="100px" TextAlign="TextAlign.End"><Template Context="p">@Qty(p.NetQuantity)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="Revenue" Title="Revenue" TextAlign="TextAlign.End"><Template Context="p">@Money(p.Revenue)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="Cost" Title="Cost" TextAlign="TextAlign.End"><Template Context="p">@Money(p.Cost)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="GrossProfit" Title="Profit" TextAlign="TextAlign.End"><Template Context="p"><span class="@(p.GrossProfit >= 0 ? "text-ok" : "text-warn")">@Money(p.GrossProfit)</span></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="MarginPercent" Title="Margin" Width="90px" TextAlign="TextAlign.End"><Template Context="p">@Pct(p.MarginPercent)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ProductSalesRowDto" Title="" Width="75px" Sortable="false" TextAlign="TextAlign.Center">
+                                <Template Context="p"><RadzenButton Icon="insights" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => ShowProductInsightAsync(p))" /></Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+
+                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
+                    <h3 style="margin-top:0">Category performance</h3>
+                    <RadzenDataGrid Data="@_report.SalesByCategory" TItem="CategorySalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="CategoryName" Title="Category" />
+                            <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="QuantitySold" Title="Qty" TextAlign="TextAlign.End"><Template Context="c">@Qty(c.QuantitySold)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="Revenue" Title="Revenue" TextAlign="TextAlign.End"><Template Context="c">@Money(c.Revenue)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="GrossProfit" Title="Profit" TextAlign="TextAlign.End"><Template Context="c">@Money(c.GrossProfit)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="MarginPercent" Title="Margin" TextAlign="TextAlign.End"><Template Context="c">@Pct(c.MarginPercent)</Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Payments & Discounts">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Payment mix</h3>
+                    <RadzenDataGrid Data="@_report.PaymentMix" TItem="PaymentMethodRowDto" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="Method" Title="Method" />
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="PaymentCount" Title="Lines" Width="100px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="Amount" Title="Amount" TextAlign="TextAlign.End"><Template Context="p">@Money(p.Amount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="PercentOfTotal" Title="Share" Width="100px" TextAlign="TextAlign.End"><Template Context="p">@Pct(p.PercentOfTotal)</Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+
+                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
+                    <h3 style="margin-top:0">Discount details</h3>
+                    <RadzenDataGrid Data="@_report.Discounts" TItem="DiscountReportRowDto" AllowPaging="true" PageSize="15" AllowSorting="true" AllowFiltering="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="CompletedOn" Title="Date" Width="135px"><Template Context="d">@d.CompletedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="SaleNumber" Title="Sale #" Width="160px" />
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="CashierName" Title="Cashier" />
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="InvoiceDiscount" Title="Invoice" TextAlign="TextAlign.End"><Template Context="d">@Money(d.InvoiceDiscount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="LineDiscount" Title="Lines" TextAlign="TextAlign.End"><Template Context="d">@Money(d.LineDiscount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="TotalDiscount" Title="Total" TextAlign="TextAlign.End"><Template Context="d"><strong>@Money(d.TotalDiscount)</strong></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="Reason" Title="Reason" />
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Voids & Returns">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Voided sales</h3>
+                    <RadzenDataGrid Data="@_report.Voids" TItem="VoidSaleReportRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CompletedOn" Title="Date" Width="135px"><Template Context="v">@v.CompletedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="SaleNumber" Title="Sale #" Width="160px" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CashierName" Title="Cashier" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CustomerName" Title="Customer" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="TotalAmount" Title="Amount" TextAlign="TextAlign.End"><Template Context="v">@Money(v.TotalAmount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="Notes" Title="Notes" />
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+
+                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
+                    <h3 style="margin-top:0">Returns / refunds</h3>
+                    <RadzenDataGrid Data="@_report.Returns" TItem="ReturnReportRowDto" AllowPaging="true" PageSize="15" AllowSorting="true" AllowFiltering="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ProcessedOn" Title="Date" Width="135px"><Template Context="r">@r.ProcessedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ReturnNumber" Title="Return #" Width="160px" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ProcessedByName" Title="Processed by" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="RefundMethod" Title="Method" Width="100px" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="TotalAmount" Title="Amount" TextAlign="TextAlign.End"><Template Context="r">@Money(r.TotalAmount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="Notes" Title="Notes" />
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Inventory">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Current stock, low stock and valuation</h3>
+                    <RadzenDataGrid Data="@_report.CurrentStock" TItem="CurrentStockRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="Sku" Title="SKU" Width="110px" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="ProductName" Title="Product" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="CategoryName" Title="Category" Width="145px" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="QuantityOnHand" Title="On hand" TextAlign="TextAlign.End"><Template Context="s">@Qty(s.QuantityOnHand)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="ReorderLevel" Title="Reorder" TextAlign="TextAlign.End"><Template Context="s">@Qty(s.ReorderLevel)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="StockValue" Title="Value" TextAlign="TextAlign.End"><Template Context="s">@Money(s.StockValue)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Title="Status" Width="115px">
+                                <Template Context="s">
+                                    @if (s.IsOutOfStock)
+                                    {
+                                        <span class="text-warn">Out</span>
+                                    }
+                                    else if (s.IsLowStock)
+                                    {
+                                        <span class="text-warn">Low</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-ok">OK</span>
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+
+                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
+                    <h3 style="margin-top:0">Stock movement summary</h3>
+                    <RadzenDataGrid Data="@_report.StockMovements" TItem="StockMovementSummaryRowDto" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="MovementType" Title="Movement" />
+                            <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="MovementCount" Title="Count" Width="100px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="QuantityIn" Title="In" TextAlign="TextAlign.End"><Template Context="m">@Qty(m.QuantityIn)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="QuantityOut" Title="Out" TextAlign="TextAlign.End"><Template Context="m">@Qty(m.QuantityOut)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="NetQuantity" Title="Net" TextAlign="TextAlign.End"><Template Context="m">@Qty(m.NetQuantity)</Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Transfers">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Stock transfers</h3>
+                    <RadzenDataGrid Data="@_report.StockTransfers" TItem="StockTransferReportRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="RequestedOn" Title="Requested" Width="135px"><Template Context="t">@t.RequestedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="TransferNumber" Title="Transfer #" Width="180px" />
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="SourceStoreName" Title="From" />
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="DestinationStoreName" Title="To" />
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="Status" Title="Status" Width="130px" />
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="QuantityRequested" Title="Requested" TextAlign="TextAlign.End"><Template Context="t">@Qty(t.QuantityRequested)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="QuantityDispatched" Title="Dispatched" TextAlign="TextAlign.End"><Template Context="t">@Qty(t.QuantityDispatched)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="QuantityReceived" Title="Received" TextAlign="TextAlign.End"><Template Context="t">@Qty(t.QuantityReceived)</Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Cash & Shifts">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Shift cash report</h3>
+                    <RadzenDataGrid Data="@_report.Shifts" TItem="ShiftCashReportRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="OpenedOn" Title="Opened" Width="135px"><Template Context="s">@s.OpenedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="ShiftNumber" Title="Shift #" Width="190px" />
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="RegisterName" Title="Register" />
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="OpenedByName" Title="Cashier" />
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="Status" Title="Status" Width="100px" />
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="ExpectedCash" Title="Expected" TextAlign="TextAlign.End"><Template Context="s">@Money(s.ExpectedCash)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="CountedCash" Title="Counted" TextAlign="TextAlign.End"><Template Context="s">@Money(s.CountedCash)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="Variance" Title="Variance" TextAlign="TextAlign.End"><Template Context="s"><span class="@(s.Variance == 0 ? "text-ok" : "text-warn")">@Money(s.Variance)</span></Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Tax & Purchases">
+                <div class="kpi-grid" style="margin-bottom:1rem">
+                    <div class="kpi-card"><div class="kpi-label">Taxable sales</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Tax.TaxableSales)</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Tax collected</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Tax.GstCollected)</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Exempt sales</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Tax.ExemptSales)</div></div>
+                    <div class="kpi-card"><div class="kpi-label">Purchase tax</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Purchases.TotalTax)</div></div>
+                </div>
+
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Tax by rate</h3>
+                    <RadzenDataGrid Data="@_report.Tax.ByRate" TItem="TaxRateRowDto">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="Rate" Title="Rate" Width="100px"><Template Context="t">@Pct(t.Rate)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="TaxableAmount" Title="Taxable" TextAlign="TextAlign.End"><Template Context="t">@Money(t.TaxableAmount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="TaxAmount" Title="Tax" TextAlign="TextAlign.End"><Template Context="t"><strong>@Money(t.TaxAmount)</strong></Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+
+                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
+                    <h3 style="margin-top:0">Purchases by supplier</h3>
+                    <p style="margin:0 0 1rem;color:var(--sp-text-muted)">
+                        @_report.Purchases.PurchaseCount GRNs · Total @Money(_report.Purchases.TotalPurchased) · Tax @Money(_report.Purchases.TotalTax)
+                    </p>
+                    <RadzenDataGrid Data="@_report.Purchases.BySupplier" TItem="PurchaseSupplierRowDto" AllowSorting="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="PurchaseSupplierRowDto" Property="SupplierName" Title="Supplier" />
+                            <RadzenDataGridColumn TItem="PurchaseSupplierRowDto" Property="PurchaseCount" Title="GRNs" Width="100px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="PurchaseSupplierRowDto" Property="TotalAmount" Title="Total" TextAlign="TextAlign.End"><Template Context="s"><strong>@Money(s.TotalAmount)</strong></Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Customers">
+                <RadzenCard class="content-card grid-card">
+                    <h3 style="margin-top:0">Top customers and outstanding balances</h3>
+                    <RadzenDataGrid Data="@_report.Customers" TItem="CustomerReportRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="CustomerName" Title="Customer" />
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="Phone" Title="Phone" Width="150px" />
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="InvoiceCount" Title="Invoices" Width="95px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="TotalSpend" Title="Spend" TextAlign="TextAlign.End"><Template Context="c">@Money(c.TotalSpend)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="AverageBasket" Title="Avg basket" TextAlign="TextAlign.End"><Template Context="c">@Money(c.AverageBasket)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="Returns" Title="Returns" TextAlign="TextAlign.End"><Template Context="c">@Money(c.Returns)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="Balance" Title="Balance" TextAlign="TextAlign.End"><Template Context="c"><span class="@(c.Balance <= 0 ? "text-ok" : "text-warn")">@Money(c.Balance)</span></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="LastPurchaseOn" Title="Last purchase" Width="140px"><Template Context="c">@(c.LastPurchaseOn?.ToString("dd MMM yyyy") ?? "-")</Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+}
+
+@code {
+    private ReportsPageDto? _report;
+    private List<StoreOption> _storeOptions = [new("All stores", null)];
+    private Guid? _storeId;
+    private DateTime? _from = DateTime.Today.AddDays(-29);
+    private DateTime? _to = DateTime.Today;
+    private bool _loading = true;
+
+    private sealed record StoreOption(string Text, Guid? Value);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeOptions.AddRange(stores.Select(s => new StoreOption($"{s.Code} · {s.Name}", s.Id)));
+        if (StoreContext.StoreId is { } selectedStore && stores.Any(s => s.Id == selectedStore))
+        {
+            _storeId = selectedStore;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        _report = await ReportService.GetReportsAsync(new ReportQueryDto
+        {
+            StoreId = _storeId,
+            FromUtc = _from?.Date.ToUniversalTime(),
+            ToUtc = _to?.Date.AddDays(1).ToUniversalTime()
+        });
+
+        _loading = false;
+    }
+
+    private async Task SetPresetAsync(int daysBack)
+    {
+        _to = DateTime.Today;
+        _from = DateTime.Today.AddDays(-daysBack);
+        await LoadAsync();
+    }
+
+    private string ExportUrl
+    {
+        get
+        {
+            var parts = new List<string>();
+
+            if (_storeId.HasValue)
+            {
+                parts.Add($"storeId={_storeId.Value}");
+            }
+
+            if (_from.HasValue)
+            {
+                parts.Add($"fromUtc={Uri.EscapeDataString(_from.Value.Date.ToUniversalTime().ToString("O"))}");
+            }
+
+            if (_to.HasValue)
+            {
+                parts.Add($"toUtc={Uri.EscapeDataString(_to.Value.Date.AddDays(1).ToUniversalTime().ToString("O"))}");
+            }
+
+            return "/api/reports/export" + (parts.Count == 0 ? string.Empty : "?" + string.Join("&", parts));
+        }
+    }
+
+    private async Task ShowStoreInsightAsync(StoreSalesRowDto row) =>
+        await ShowInsightAsync($"Store · {row.StoreName}", new Dictionary<string, string>
+        {
+            ["Transactions"] = row.Transactions.ToString("N0"),
+            ["Gross Sales"] = Money(row.GrossSales),
+            ["Returns"] = Money(row.Returns),
+            ["Net Sales"] = Money(row.NetSales),
+            ["Discounts"] = Money(row.Discounts),
+            ["Gross Profit"] = Money(row.GrossProfit),
+            ["Margin"] = Pct(row.MarginPercent),
+            ["Average Basket"] = Money(row.AverageBasket)
+        });
+
+    private async Task ShowCashierInsightAsync(CashierSalesRowDto row) =>
+        await ShowInsightAsync($"Cashier · {row.CashierName}", new Dictionary<string, string>
+        {
+            ["Transactions"] = row.Transactions.ToString("N0"),
+            ["Void Count"] = row.VoidCount.ToString("N0"),
+            ["Return Count"] = row.ReturnCount.ToString("N0"),
+            ["Gross Sales"] = Money(row.GrossSales),
+            ["Discounts"] = Money(row.Discounts),
+            ["Returns"] = Money(row.Returns),
+            ["Net Sales"] = Money(row.NetSales),
+            ["Average Basket"] = Money(row.AverageBasket)
+        });
+
+    private async Task ShowProductInsightAsync(ProductSalesRowDto row) =>
+        await ShowInsightAsync($"Product · {row.ProductName}", new Dictionary<string, string>
+        {
+            ["SKU"] = row.Sku,
+            ["Category"] = row.CategoryName,
+            ["Brand"] = row.BrandName,
+            ["Quantity Sold"] = Qty(row.QuantitySold),
+            ["Quantity Returned"] = Qty(row.QuantityReturned),
+            ["Net Quantity"] = Qty(row.NetQuantity),
+            ["Revenue"] = Money(row.Revenue),
+            ["Cost"] = Money(row.Cost),
+            ["Gross Profit"] = Money(row.GrossProfit),
+            ["Margin"] = Pct(row.MarginPercent),
+            ["Discount"] = Money(row.DiscountAmount)
+        });
+
+    private async Task ShowInsightAsync(string title, Dictionary<string, string> details)
+    {
+        await DialogService.OpenAsync<ReportInsightDialog>(title,
+            new Dictionary<string, object>
+            {
+                [nameof(ReportInsightDialog.Details)] = details
+            },
+            new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = true });
+    }
+
+    private static string Money(decimal value) => value.ToString("C2");
+    private static string Money0(decimal value) => value.ToString("C0");
+    private static string Qty(decimal value) => value.ToString("0.###");
+    private static string Pct(decimal value) => value.ToString("0.#") + "%";
+}

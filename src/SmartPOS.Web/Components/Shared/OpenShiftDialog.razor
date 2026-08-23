@@ -1,0 +1,65 @@
+@inject IShiftService ShiftService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="OpenShiftDto" Data="@Model" Submit="@OnSubmit">
+    <RadzenStack Gap="1rem">
+        <RadzenFormField Text="Register" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenDropDown @bind-Value="Model.RegisterId" Data="@_registers" TextProperty="Display" ValueProperty="Id"
+                            Disabled="@(_registers.Count <= 1)" Style="width:100%" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Opening float (Rs)" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenNumeric @bind-Value="Model.OpeningFloat" Min="0" />
+        </RadzenFormField>
+        <small class="form-hint">Cash already in the drawer when the shift starts.</small>
+
+        <RadzenFormField Text="Notes (optional)" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea @bind-Value="Model.Notes" Rows="2" />
+        </RadzenFormField>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="play_arrow" Text="Open shift" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public Guid? RegisterId { get; set; }
+
+    private OpenShiftDto Model = new();
+    private IReadOnlyList<RegisterOptionDto> _registers = [];
+    private bool _saving;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _registers = await ShiftService.GetRegisterOptionsAsync();
+        var available = _registers.Where(r => !r.HasOpenShift).ToList();
+        _registers = available.Count > 0 ? available : _registers;
+
+        Model.RegisterId = RegisterId ?? _registers.FirstOrDefault()?.Id ?? Guid.Empty;
+    }
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+        var result = await ShiftService.OpenShiftAsync(Model);
+        _saving = false;
+
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

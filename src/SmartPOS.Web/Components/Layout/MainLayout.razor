@@ -1,0 +1,404 @@
+@inherits LayoutComponentBase
+@implements IAsyncDisposable
+@inject IDashboardService DashboardService
+@inject IAlertService AlertService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject IJSRuntime Js
+@inject NavigationManager Navigation
+
+<div class="app-shell" @onclick="CloseNotifications">
+    <aside class="app-sidebar @(sidebarExpanded ? "expanded" : "collapsed")">
+        <div class="sidebar-brand">
+            <div class="brand-logo"><RadzenIcon Icon="storefront" /></div>
+            <div class="brand-text">
+                <strong>SmartPOS</strong>
+                <small>Retail Command</small>
+            </div>
+        </div>
+
+        <div class="sidebar-scroll">
+            <NavMenu LowStockCount="@_lowStockCount" />
+        </div>
+
+        <div class="sidebar-footer">
+            <button class="sidebar-toggle" @onclick="ToggleSidebar" title="Toggle menu">
+                <RadzenIcon Icon="@(sidebarExpanded ? "chevron_left" : "chevron_right")" />
+            </button>
+        </div>
+    </aside>
+
+    <div class="app-main">
+        <header class="app-topbar">
+            <div class="topbar-left">
+                <div class="store-chip">
+                    <RadzenIcon Icon="store" />
+                    <RadzenDropDown TValue="Guid?" Data="@_stores" @bind-Value="_selectedStoreId"
+                                    TextProperty="Name" ValueProperty="Id" Change="@OnStoreChanged"
+                                    AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                                    Style="border:none;background:transparent;min-width:180px"
+                                    Placeholder="Select store" />
+                </div>
+                <button type="button" class="topbar-search" @onclick="OpenSearchFromUi" title="Search (Ctrl+K)">
+                    <RadzenIcon Icon="search" />
+                    <span class="topbar-search-label">Search products, stores…</span>
+                    <kbd>Ctrl K</kbd>
+                </button>
+            </div>
+            <div class="topbar-right">
+                <button class="icon-btn" title="Help"><RadzenIcon Icon="help_outline" /></button>
+
+                <div class="notification-shell" @onclick:stopPropagation="true">
+                    <button class="icon-btn" title="@NotificationTitle" @onclick="ToggleNotifications">
+                        <RadzenIcon Icon="notifications" />
+                        @if (_alertCount > 0)
+                        {
+                            <span class="dot-badge">@(_alertCount > 9 ? "9+" : _alertCount.ToString())</span>
+                        }
+                    </button>
+
+                    @if (_notificationsOpen)
+                    {
+                        <div class="notification-popover">
+                            <div class="notification-header">
+                                <div>
+                                    <strong>Notifications</strong>
+                                    <small>@NotificationTitle</small>
+                                </div>
+                                <RadzenButton Text="View all" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => GoToAlerts())" />
+                            </div>
+
+                            @if (_notificationsLoading)
+                            {
+                                <div class="notification-empty">
+                                    <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+                                    <span>Loading alerts…</span>
+                                </div>
+                            }
+                            else if (_notificationAlerts.Count == 0)
+                            {
+                                <div class="notification-empty">
+                                    <RadzenIcon Icon="verified" />
+                                    <span>No active alerts right now.</span>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="notification-list">
+                                    @foreach (var alert in _notificationAlerts)
+                                    {
+                                        <button type="button" class="notification-item" @onclick="@(() => OpenAlert(alert))">
+                                            <span class="notification-severity @SeverityCss(alert.Severity)"></span>
+                                            <span class="notification-body">
+                                                <span class="notification-title">@alert.Title</span>
+                                                <span class="notification-message">@alert.Message</span>
+                                                <span class="notification-meta">@alert.Type · @alert.StoreName</span>
+                                            </span>
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="user-chip" @onclick="SignOut" title="Sign out">
+                    <div class="user-avatar">@avatarInitials</div>
+                    <div class="user-meta">
+                        <strong>@displayName</strong>
+                        <small>@roleLabel</small>
+                    </div>
+                    <RadzenIcon Icon="logout" Style="color:var(--sp-text-muted);font-size:1.1rem" />
+                </div>
+            </div>
+        </header>
+
+        <main class="app-content">
+            <SmartPosErrorBoundary>
+                @Body
+            </SmartPosErrorBoundary>
+        </main>
+    </div>
+</div>
+
+<GlobalSearchDialog @bind-Visible="_searchOpen" />
+
+<RadzenNotification />
+<RadzenDialog />
+<RadzenTooltip />
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthStateTask { get; set; }
+
+    private bool sidebarExpanded = true;
+    private bool _searchOpen;
+    private string displayName = "Guest";
+    private string roleLabel = "Not signed in";
+    private string avatarInitials = "G";
+    private int _lowStockCount;
+    private int _alertCount;
+    private bool _notificationsOpen;
+    private bool _notificationsLoading;
+    private IReadOnlyList<SmartAlertDto> _notificationAlerts = [];
+    private IReadOnlyList<StoreDto> _stores = [];
+    private Guid? _selectedStoreId;
+    private DotNetObjectReference<MainLayout>? _dotNetRef;
+    private IJSObjectReference? _searchModule;
+    private IJSObjectReference? _storeModule;
+    private bool _disposed;
+    private readonly CancellationTokenSource _disposeCts = new();
+
+    private string NotificationTitle =>
+        _alertCount > 0 ? $"{_alertCount} active alert(s)" : "No active alerts";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthStateTask is not null)
+        {
+            var authState = await AuthStateTask;
+            var user = authState.User;
+            if (user.Identity?.IsAuthenticated == true)
+            {
+                displayName = user.Identity.Name ?? "User";
+                roleLabel = user.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value
+                            ?? user.Claims.FirstOrDefault(c => c.Type.Contains("role"))?.Value
+                            ?? "Member";
+                avatarInitials = BuildInitials(displayName);
+            }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeModule = await Js.InvokeAsync<IJSObjectReference>("import", "./store-context.js");
+
+        var selectedFromContext = StoreContext.StoreId;
+        var persisted = await _storeModule.InvokeAsync<string?>("getSelectedStoreId");
+        if (selectedFromContext is null && Guid.TryParse(persisted, out var persistedStoreId))
+        {
+            selectedFromContext = persistedStoreId;
+        }
+
+        if (selectedFromContext is { } requested && _stores.Any(s => s.Id == requested))
+        {
+            _selectedStoreId = requested;
+            StoreContext.SetStore(requested);
+            await _storeModule.InvokeVoidAsync("setSelectedStoreId", requested.ToString());
+        }
+        else if (_stores.Count > 0)
+        {
+            _selectedStoreId = _stores[0].Id;
+            StoreContext.SetStore(_selectedStoreId.Value);
+            await _storeModule.InvokeVoidAsync("setSelectedStoreId", _selectedStoreId.Value.ToString());
+
+            // The body component may have initialized before the default store was selected.
+            // Reload once so every page starts with the same store context.
+            Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+            return;
+        }
+
+        await LoadNavStatsAsync();
+        await LoadNotificationsAsync();
+
+        _dotNetRef = DotNetObjectReference.Create(this);
+        _searchModule = await Js.InvokeAsync<IJSObjectReference>("import", "./global-search.js");
+        await _searchModule.InvokeVoidAsync("register", _dotNetRef);
+
+        if (!_disposed)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadNavStatsAsync()
+    {
+        try
+        {
+            var navStats = await DashboardService.GetNavStatsAsync(_disposeCts.Token);
+            if (!_disposed)
+            {
+                _lowStockCount = navStats.LowStockCount;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Navigation/store switch cancelled this load.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Old Blazor circuit was disposed during a forced store refresh.
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase))
+        {
+            // EF can surface disposed-context issues as InvalidOperationException in async UI flows.
+        }
+    }
+
+    private async Task LoadNotificationsAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _notificationsLoading = true;
+        try
+        {
+            var alerts = await AlertService.GetAlertsAsync(new SmartAlertQueryDto
+            {
+                StoreId = _selectedStoreId,
+                IncludeInfo = true
+            }, _disposeCts.Token);
+
+            if (!_disposed)
+            {
+                _alertCount = alerts.Summary.Total;
+                _notificationAlerts = alerts.Alerts.Take(6).ToList();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Navigation/store switch cancelled this load.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Old Blazor circuit was disposed during a forced store refresh.
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("disposed", StringComparison.OrdinalIgnoreCase))
+        {
+            // Ignore stale work from a previous circuit.
+        }
+        finally
+        {
+            if (!_disposed)
+            {
+                _notificationsLoading = false;
+            }
+        }
+    }
+
+    private void OpenSearchFromUi() => _searchOpen = true;
+
+    [JSInvokable]
+    public async Task OpenSearch()
+    {
+        _searchOpen = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OnStoreChanged(object? value)
+    {
+        Guid? selected = value switch
+        {
+            Guid id => id,
+            string text when Guid.TryParse(text, out var id) => id,
+            _ => null
+        };
+
+        if (selected is { } storeId)
+        {
+            _selectedStoreId = storeId;
+            StoreContext.SetStore(storeId);
+            if (_storeModule is not null)
+            {
+                await _storeModule.InvokeVoidAsync("setSelectedStoreId", storeId.ToString());
+            }
+        }
+        else
+        {
+            _selectedStoreId = null;
+            StoreContext.ClearStore();
+            if (_storeModule is not null)
+            {
+                await _storeModule.InvokeVoidAsync("clearSelectedStoreId");
+            }
+        }
+
+        // Force a fresh page initialization so dashboards, lists, reports, and POS all
+        // reload with the newly selected store context.
+        Navigation.NavigateTo(Navigation.Uri, forceLoad: true);
+    }
+
+    private void ToggleNotifications()
+    {
+        _notificationsOpen = !_notificationsOpen;
+    }
+
+    private void CloseNotifications()
+    {
+        if (_notificationsOpen)
+        {
+            _notificationsOpen = false;
+        }
+    }
+
+    private void OpenAlert(SmartAlertDto alert)
+    {
+        _notificationsOpen = false;
+        Navigation.NavigateTo(string.IsNullOrWhiteSpace(alert.ActionUrl) ? "/alerts" : alert.ActionUrl);
+    }
+
+    private void GoToAlerts()
+    {
+        _notificationsOpen = false;
+        Navigation.NavigateTo("/alerts");
+    }
+
+    private static string SeverityCss(string severity) => severity switch
+    {
+        "Critical" => "critical",
+        "Warning" => "warning",
+        "Info" => "info",
+        _ => "info"
+    };
+
+    private static string BuildInitials(string name)
+    {
+        var at = name.IndexOf('@');
+        var core = at > 0 ? name[..at] : name;
+        var parts = core.Split([' ', '.', '_', '-'], StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length switch
+        {
+            0 => "U",
+            1 => parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant(),
+            _ => $"{char.ToUpperInvariant(parts[0][0])}{char.ToUpperInvariant(parts[1][0])}"
+        };
+    }
+
+    private void ToggleSidebar() => sidebarExpanded = !sidebarExpanded;
+
+    private void SignOut() => Navigation.NavigateTo("/auth/logout", forceLoad: true);
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        try { _disposeCts.Cancel(); } catch { /* no-op */ }
+
+        if (_searchModule is not null)
+        {
+            try
+            {
+                await _searchModule.InvokeVoidAsync("dispose");
+                await _searchModule.DisposeAsync();
+            }
+            catch { /* circuit may be gone */ }
+        }
+        if (_storeModule is not null)
+        {
+            try
+            {
+                await _storeModule.DisposeAsync();
+            }
+            catch { /* circuit may be gone */ }
+        }
+
+        _dotNetRef?.Dispose();
+        _disposeCts.Dispose();
+    }
+}

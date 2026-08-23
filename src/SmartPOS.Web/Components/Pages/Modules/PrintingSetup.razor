@@ -1,0 +1,308 @@
+@page "/setup/printing"
+@attribute [Authorize(Policy = Permissions.Setup.PrintingView)]
+@inject IPrintSettingsService PrintSettingsService
+@inject IStoreService StoreService
+@inject IRegisterService RegisterService
+@inject NotificationService Notifications
+@inject IJSRuntime Js
+
+<PageTitle>Receipt & Printing · SmartPOS</PageTitle>
+
+<section class="content-shell sp-print-setup-page">
+    <div class="module-header">
+        <div>
+            <p class="eyebrow">Setup</p>
+            <h1>Receipt &amp; Printing</h1>
+            <p>Customize receipt content, print copies, cash drawer behavior, and register print station settings.</p>
+        </div>
+        <AuthorizeView Policy="@Permissions.Setup.PrintingManage">
+            <Authorized>
+                <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+                    <RadzenButton Text="Save template" Icon="save" ButtonStyle="ButtonStyle.Primary" Click="@(() => SaveTemplateAsync())" />
+                    <RadzenButton Text="Save station" Icon="print" ButtonStyle="ButtonStyle.Light" Click="@(() => SaveStationAsync())" />
+                </RadzenStack>
+            </Authorized>
+        </AuthorizeView>
+    </div>
+
+    <RadzenCard class="content-card sp-print-context-card">
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+            <label class="form-field wide">
+                <span>Store</span>
+                <RadzenDropDown TValue="Guid?" @bind-Value="_selectedStoreId" Data="@_stores" TextProperty="Name" ValueProperty="Id" Style="width:260px" />
+            </label>
+            <label class="form-field wide">
+                <span>Register / station</span>
+                <RadzenDropDown TValue="Guid?" @bind-Value="_selectedRegisterId" Data="@_registers" TextProperty="Name" ValueProperty="Id" AllowClear="true" Placeholder="Store default" Style="width:260px" />
+            </label>
+            <RadzenButton Text="Load settings" Icon="refresh" ButtonStyle="ButtonStyle.Light" Click="@(() => LoadSelectedAsync())" />
+        </RadzenStack>
+    </RadzenCard>
+
+    <RadzenTabs>
+        <Tabs>
+            <RadzenTabsItem Text="Receipt Designer">
+                <div class="sp-print-designer-layout">
+                    <RadzenCard class="content-card">
+                        <h3>Template content</h3>
+                        <div class="form-grid two">
+                            <label><span>Template name</span><RadzenTextBox @bind-Value="_template.Name" Style="width:100%" /></label>
+                            <label><span>Paper size</span><RadzenDropDown @bind-Value="_template.PaperSize" Data="@_paperSizes" Style="width:100%" /></label>
+                            <label><span>Business name override</span><RadzenTextBox @bind-Value="_template.BusinessName" Placeholder="Blank = store name" Style="width:100%" /></label>
+                            <label><span>Subtitle</span><RadzenTextBox @bind-Value="_template.Subtitle" Placeholder="Retail POS Receipt" Style="width:100%" /></label>
+                            <label class="full"><span>Header text</span><RadzenTextArea @bind-Value="_template.HeaderText" Rows="2" Style="width:100%" /></label>
+                            <label class="full"><span>Footer message</span><RadzenTextArea @bind-Value="_template.FooterText" Rows="2" Style="width:100%" /></label>
+                            <label class="full"><span>Return policy</span><RadzenTextArea @bind-Value="_template.ReturnPolicyText" Rows="3" Style="width:100%" /></label>
+                        </div>
+
+                        <h3 class="section-title-small">Show / hide sections</h3>
+                        <div class="sp-print-check-grid">
+                            <label><RadzenCheckBox @bind-Value="_template.ShowStoreName" /> Store name</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowCustomer" /> Customer</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowCashier" /> Cashier</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowPaymentSummary" /> Payment lines</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowTaxDetails" /> Tax</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowItemSku" /> Item SKU</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowDiscountDetails" /> Discounts</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowReceiptNumberBox" /> Receipt ID box</label>
+                            <label><RadzenCheckBox @bind-Value="_template.ShowPrintedBy" /> Printed by SmartPOS</label>
+                            <label><RadzenCheckBox @bind-Value="_template.IsDefault" /> Default template</label>
+                        </div>
+                    </RadzenCard>
+
+                    <RadzenCard class="content-card sp-print-preview-card">
+                        <div class="sp-print-preview-head">
+                            <h3>Live preview</h3>
+                            <RadzenButton Text="Test print" Icon="print" ButtonStyle="ButtonStyle.Light" Click="@(() => TestReceiptPrintAsync())" />
+                        </div>
+                        <div id="receiptDesignerPreview" class="sp-print-receipt sp-print-receipt-preview sp-designer-receipt-preview">
+                            <header class="sp-print-receipt-header">
+                                @if (_template.ShowStoreName)
+                                {
+                                    <div class="sp-print-receipt-brand">@ReceiptBusinessName</div>
+                                }
+                                <div class="sp-print-receipt-subtitle">@(string.IsNullOrWhiteSpace(_template.Subtitle) ? "Retail POS Receipt" : _template.Subtitle)</div>
+                                @if (!string.IsNullOrWhiteSpace(_template.HeaderText))
+                                {
+                                    <small>@_template.HeaderText</small>
+                                }
+                                <div class="sp-print-receipt-divider"></div>
+                                <div class="sp-print-receipt-number">DEMO-SALE-0001</div>
+                            </header>
+
+                            <section class="sp-print-receipt-meta-grid">
+                                <div><span>Date</span><strong>@DateTime.Now.ToString("dd MMM yyyy")</strong></div>
+                                <div><span>Time</span><strong>@DateTime.Now.ToString("h:mm tt")</strong></div>
+                                <div><span>Register</span><strong>Counter 1</strong></div>
+                                @if (_template.ShowCashier)
+                                {
+                                    <div><span>Cashier</span><strong>Admin User</strong></div>
+                                }
+                                @if (_template.ShowCustomer)
+                                {
+                                    <div class="sp-print-receipt-meta-wide"><span>Customer</span><strong>Walk-In Customer</strong></div>
+                                }
+                            </section>
+
+                            <section class="sp-print-receipt-items">
+                                <div class="sp-print-receipt-items-head"><span>Item</span><span>Qty</span><span>Amount</span></div>
+                                <div class="sp-print-receipt-item">
+                                    <div class="sp-print-receipt-item-name">
+                                        <strong>Demo Product</strong>
+                                        @if (_template.ShowItemSku)
+                                        {
+                                            <small>SKU-DEMO · Rs 500.00 each</small>
+                                        }
+                                    </div>
+                                    <div class="sp-print-receipt-item-qty">2</div>
+                                    <div class="sp-print-receipt-item-total">Rs 1,000.00</div>
+                                </div>
+                            </section>
+
+                            <section class="sp-print-receipt-totals">
+                                <div><span>Subtotal</span><strong>Rs 1,000.00</strong></div>
+                                @if (_template.ShowDiscountDetails)
+                                {
+                                    <div><span>Discount</span><strong>-Rs 50.00</strong></div>
+                                }
+                                @if (_template.ShowTaxDetails)
+                                {
+                                    <div><span>Tax</span><strong>Rs 95.00</strong></div>
+                                }
+                                <div class="sp-print-receipt-grand"><span>Total</span><strong>Rs 1,045.00</strong></div>
+                                @if (_template.ShowPaymentSummary)
+                                {
+                                    <div><span>Cash</span><strong>Rs 1,045.00</strong></div>
+                                }
+                            </section>
+
+                            <section class="sp-print-receipt-footer">
+                                @if (_template.ShowReceiptNumberBox)
+                                {
+                                    <div class="sp-print-receipt-code"><span>Receipt ID</span><strong>DEMO-SALE-0001</strong></div>
+                                }
+                                <p>@(string.IsNullOrWhiteSpace(_template.FooterText) ? "Thank you for shopping with us." : _template.FooterText)</p>
+                                <small>@(string.IsNullOrWhiteSpace(_template.ReturnPolicyText) ? "Please keep this receipt for return/exchange reference." : _template.ReturnPolicyText)</small>
+                                @if (_template.ShowPrintedBy)
+                                {
+                                    <small class="sp-print-receipt-system">Printed by SmartPOS</small>
+                                }
+                            </section>
+                        </div>
+                    </RadzenCard>
+                </div>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Print Station">
+                <div class="sp-print-designer-layout">
+                    <RadzenCard class="content-card">
+                        <h3>Station settings</h3>
+                        <div class="form-grid two">
+                            <label><span>Station name</span><RadzenTextBox @bind-Value="_station.StationName" Style="width:100%" /></label>
+                            <label><span>Receipt mode</span><RadzenDropDown @bind-Value="_station.DefaultReceiptMode" Data="@_receiptModes" Style="width:100%" /></label>
+                            <label><span>Receipt printer name</span><RadzenTextBox @bind-Value="_station.ReceiptPrinterName" Placeholder="Browser default or printer alias" Style="width:100%" /></label>
+                            <label><span>Label printer name</span><RadzenTextBox @bind-Value="_station.LabelPrinterName" Placeholder="Label printer alias" Style="width:100%" /></label>
+                            <label><span>Receipt copies</span><RadzenNumeric TValue="int" @bind-Value="_station.ReceiptCopies" Style="width:100%" /></label>
+                            <label><span>Local print agent URL</span><RadzenTextBox @bind-Value="_station.LocalPrintAgentUrl" Style="width:100%" /></label>
+                        </div>
+
+                        <div class="sp-print-check-grid station">
+                            <label><RadzenCheckBox @bind-Value="_station.UseBrowserPrint" /> Use browser print dialog</label>
+                            <label><RadzenCheckBox @bind-Value="_station.AutoPrintReceipt" /> Auto-print after sale</label>
+                            <label><RadzenCheckBox @bind-Value="_station.UseLocalPrintAgent" /> Use local print agent when available</label>
+                            <label><RadzenCheckBox @bind-Value="_station.EnableCashDrawerKick" /> Enable cash drawer kick</label>
+                        </div>
+
+                        <label class="form-field wide"><span>Cash drawer command hex</span><RadzenTextBox @bind-Value="_station.CashDrawerCommandHex" Style="width:100%" /></label>
+
+                        <RadzenAlert Severity="AlertSeverity.Info" Variant="Variant.Flat" Style="margin-top:1rem">
+                            Browser printing works now. Direct ESC/POS printing and drawer kick need a small local print agent on the cashier machine. These settings are ready for that integration.
+                        </RadzenAlert>
+                    </RadzenCard>
+
+                    <RadzenCard class="content-card">
+                        <h3>Station tests</h3>
+                        <p class="muted-text">Use these tests after saving station settings.</p>
+                        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" Wrap="FlexWrap.Wrap">
+                            <RadzenButton Text="Test receipt print" Icon="receipt_long" ButtonStyle="ButtonStyle.Primary" Click="@(() => TestReceiptPrintAsync())" />
+                            <RadzenButton Text="Test cash drawer" Icon="account_balance_wallet" ButtonStyle="ButtonStyle.Light" Click="@(() => TestCashDrawerAsync())" />
+                        </RadzenStack>
+                    </RadzenCard>
+                </div>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+</section>
+
+@code {
+    private readonly string[] _paperSizes = ["80mm", "58mm", "a4"];
+    private readonly string[] _receiptModes = ["thermal", "80mm", "58mm", "a4"];
+    private List<StoreDto> _stores = [];
+    private List<RegisterDto> _registers = [];
+    private Guid? _selectedStoreId;
+    private Guid? _selectedRegisterId;
+    private ReceiptTemplateDto _template = new();
+    private PrintStationSettingDto _station = new();
+
+    private string ReceiptBusinessName => string.IsNullOrWhiteSpace(_template.BusinessName)
+        ? _stores.FirstOrDefault(s => s.Id == _selectedStoreId)?.Name ?? "SmartPOS Store"
+        : _template.BusinessName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _stores = (await StoreService.GetAllAsync(false)).ToList();
+        _selectedStoreId = _stores.FirstOrDefault()?.Id;
+        await LoadSelectedAsync();
+    }
+
+    private async Task LoadSelectedAsync()
+    {
+        if (_selectedStoreId is not { } storeId)
+        {
+            return;
+        }
+
+        _registers = (await RegisterService.GetAllAsync(storeId)).Where(r => r.IsActive).ToList();
+        if (_selectedRegisterId is { } regId && _registers.All(r => r.Id != regId))
+        {
+            _selectedRegisterId = null;
+        }
+
+        _template = await PrintSettingsService.GetReceiptTemplateAsync(storeId);
+        _station = await PrintSettingsService.GetPrintStationAsync(storeId, _selectedRegisterId);
+        _station.StoreId = storeId;
+        _station.RegisterId = _selectedRegisterId;
+    }
+
+    private async Task SaveTemplateAsync()
+    {
+        _template.StoreId = _selectedStoreId;
+        var result = await PrintSettingsService.SaveReceiptTemplateAsync(new UpdateReceiptTemplateDto
+        {
+            Id = _template.Id, StoreId = _template.StoreId, Name = _template.Name, IsDefault = _template.IsDefault,
+            IsActive = _template.IsActive, PaperSize = _template.PaperSize, BusinessName = _template.BusinessName,
+            Subtitle = _template.Subtitle, LogoUrl = _template.LogoUrl, HeaderText = _template.HeaderText,
+            FooterText = _template.FooterText, ReturnPolicyText = _template.ReturnPolicyText,
+            ShowStoreName = _template.ShowStoreName, ShowCustomer = _template.ShowCustomer, ShowCashier = _template.ShowCashier,
+            ShowPaymentSummary = _template.ShowPaymentSummary, ShowTaxDetails = _template.ShowTaxDetails,
+            ShowItemSku = _template.ShowItemSku, ShowDiscountDetails = _template.ShowDiscountDetails,
+            ShowPrintedBy = _template.ShowPrintedBy, ShowReceiptNumberBox = _template.ShowReceiptNumberBox,
+            Copies = _template.Copies, AutoPrintAfterSale = _template.AutoPrintAfterSale
+        });
+
+        Notify(result.Succeeded ? NotificationSeverity.Success : NotificationSeverity.Warning,
+            result.Succeeded ? "Template saved" : "Template not saved",
+            result.Succeeded ? "Receipt template has been saved." : result.Error ?? "Please check the template.");
+
+        if (result.Succeeded)
+        {
+            await LoadSelectedAsync();
+        }
+    }
+
+    private async Task SaveStationAsync()
+    {
+        if (_selectedStoreId is not { } storeId)
+        {
+            return;
+        }
+
+        _station.StoreId = storeId;
+        _station.RegisterId = _selectedRegisterId;
+        _station.ReceiptTemplateId = _template.Id;
+
+        var result = await PrintSettingsService.SavePrintStationAsync(new UpdatePrintStationSettingDto
+        {
+            Id = _station.Id, StoreId = _station.StoreId, RegisterId = _station.RegisterId,
+            StationName = _station.StationName, ReceiptTemplateId = _station.ReceiptTemplateId,
+            DefaultReceiptMode = _station.DefaultReceiptMode, UseBrowserPrint = _station.UseBrowserPrint,
+            AutoPrintReceipt = _station.AutoPrintReceipt, ReceiptCopies = _station.ReceiptCopies,
+            ReceiptPrinterName = _station.ReceiptPrinterName, LabelPrinterName = _station.LabelPrinterName,
+            UseLocalPrintAgent = _station.UseLocalPrintAgent, LocalPrintAgentUrl = _station.LocalPrintAgentUrl,
+            EnableCashDrawerKick = _station.EnableCashDrawerKick, CashDrawerCommandHex = _station.CashDrawerCommandHex
+        });
+
+        Notify(result.Succeeded ? NotificationSeverity.Success : NotificationSeverity.Warning,
+            result.Succeeded ? "Station saved" : "Station not saved",
+            result.Succeeded ? "Print station settings have been saved." : result.Error ?? "Please check the station settings.");
+
+        if (result.Succeeded)
+        {
+            await LoadSelectedAsync();
+        }
+    }
+
+    private async Task TestReceiptPrintAsync() =>
+        await Js.InvokeVoidAsync("smartPosPrintStation.printElement", "receiptDesignerPreview", _station.DefaultReceiptMode, "Receipt Test", _station);
+
+    private async Task TestCashDrawerAsync()
+    {
+        var ok = await Js.InvokeAsync<bool>("smartPosPrintStation.kickDrawer", _station);
+        Notify(ok ? NotificationSeverity.Success : NotificationSeverity.Warning,
+            ok ? "Cash drawer command sent" : "Cash drawer not opened",
+            ok ? "Local print agent accepted the drawer command." : "Enable and run a local print agent for direct drawer kick commands.");
+    }
+
+    private void Notify(NotificationSeverity severity, string summary, string detail) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 3500 });
+}

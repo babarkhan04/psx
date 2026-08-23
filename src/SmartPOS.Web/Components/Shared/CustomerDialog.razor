@@ -1,0 +1,115 @@
+@inject ICustomerService CustomerService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="CustomerDto" Data="@Model" Submit="@OnSubmit">
+    <DataAnnotationsValidator />
+    <RadzenStack Gap="1rem">
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="7">
+                <RadzenFormField Text="Customer name" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Name" Name="Name" />
+                </RadzenFormField>
+                <RadzenRequiredValidator Component="Name" Text="Name is required" Popup="true" />
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="5">
+                <RadzenFormField Text="Phone" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Phone" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="7">
+                <RadzenFormField Text="Email" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.Email" Name="Email" />
+                </RadzenFormField>
+                <RadzenEmailValidator Component="Email" Text="Invalid email" Popup="true" />
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="5">
+                <RadzenFormField Text="City" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="Model.City" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenFormField Text="Address" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextBox @bind-Value="Model.AddressLine" />
+        </RadzenFormField>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="6">
+                <RadzenFormField Text="Credit limit (Rs)" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenNumeric @bind-Value="Model.CreditLimit" Min="0" />
+                </RadzenFormField>
+                <small class="form-hint">0 means cash-only (no udhaar allowed).</small>
+            </RadzenColumn>
+            @if (_isNew)
+            {
+                <RadzenColumn Size="12" SizeMD="6">
+                    <RadzenFormField Text="Opening balance (Rs)" Variant="Variant.Outlined" Style="width:100%">
+                        <RadzenNumeric @bind-Value="Model.OpeningBalance" Min="0" />
+                    </RadzenFormField>
+                    <small class="form-hint">Existing udhaar carried over, if any.</small>
+                </RadzenColumn>
+            }
+            else
+            {
+                <RadzenColumn Size="12" SizeMD="6">
+                    <RadzenFormField Text="Current balance (Rs)" Variant="Variant.Outlined" Style="width:100%">
+                        <RadzenNumeric Value="@Model.Balance" Disabled="true" />
+                    </RadzenFormField>
+                    <small class="form-hint">Adjust via "Receive payment" or sales.</small>
+                </RadzenColumn>
+            }
+        </RadzenRow>
+
+        <RadzenFormField Text="Notes" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea @bind-Value="Model.Notes" Rows="2" />
+        </RadzenFormField>
+
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem">
+            <RadzenCheckBox @bind-Value="Model.IsActive" Name="IsActive" />
+            <RadzenLabel Text="Active" Component="IsActive" />
+        </RadzenStack>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Save" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public CustomerDto Model { get; set; } = new();
+
+    private bool _saving;
+    private string? _error;
+    private bool _isNew;
+
+    protected override void OnInitialized() => _isNew = Model.Id == Guid.Empty;
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+
+        Result result = _isNew
+            ? await CustomerService.CreateAsync(Model)
+            : await CustomerService.UpdateAsync(Model);
+
+        _saving = false;
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

@@ -1,0 +1,31 @@
+/* Barcode and shelf label designer */
+.sp-label-layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 1rem; align-items: start; }
+.sp-label-controls h3, .sp-label-selected-head h3 { margin: 0 0 0.75rem; }
+.sp-label-options { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 0.65rem 0.45rem; align-items: center; margin-top: 0.85rem; color: #334155; }
+.sp-label-products { min-width: 0; }
+.sp-label-selected-head { display: flex; justify-content: space-between; gap: 1rem; align-items: center; margin-bottom: 0.8rem; }
+.sp-label-sheet { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border: 1px dashed #cbd5e1; border-radius: 14px; background: #f8fafc; max-height: 520px; overflow: auto; }
+.sp-product-label { background: #fff; color: #111827; border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; break-inside: avoid; overflow: hidden; }
+.sp-label-sheet.small-labels .sp-product-label { width: 40mm; min-height: 30mm; }
+.sp-label-sheet.medium-labels .sp-product-label { width: 50mm; min-height: 35mm; }
+.sp-label-sheet.shelf-labels .sp-product-label { width: 80mm; min-height: 40mm; align-items: flex-start; text-align: left; padding: 8px 10px; }
+.sp-label-sheet.a4-price-tags .sp-product-label { width: 95mm; min-height: 55mm; padding: 10px; }
+.sp-label-name { font-weight: 800; line-height: 1.1; font-size: 0.78rem; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sp-label-sheet.shelf-labels .sp-label-name, .sp-label-sheet.a4-price-tags .sp-label-name { font-size: 1rem; white-space: normal; }
+.sp-label-sku, .sp-label-barcode-text, .sp-label-note { color: #475569; font-size: 0.62rem; line-height: 1.1; }
+.sp-label-price { margin-top: 2px; font-weight: 900; font-size: 1rem; color: #4f46e5; }
+.sp-label-sheet.shelf-labels .sp-label-price, .sp-label-sheet.a4-price-tags .sp-label-price { font-size: 1.8rem; color: #111827; }
+.sp-label-barcode { width: 95%; height: 28px; margin: 3px 0 1px; }
+.sp-label-sheet.shelf-labels .sp-label-barcode { height: 32px; }
+.sp-product-label.shelf .sp-label-barcode { display: none; }
+
+@media (max-width: 1100px) { .sp-label-layout { grid-template-columns: 1fr; } }
+
+@media print {
+    body { background: #fff !important; }
+    body * { visibility: hidden !important; }
+    #labelPrintArea, #labelPrintArea * { visibility: visible !important; }
+    #labelPrintArea { position: absolute; left: 0; top: 0; display: flex; gap: 0; padding: 0; border: 0; background: #fff; overflow: visible; max-height: none; }
+    .sp-product-label { border: 1px solid #111; border-radius: 0; page-break-inside: avoid; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    @page { margin: 5mm; }
+}

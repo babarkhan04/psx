@@ -1,0 +1,60 @@
+@inject IShiftService ShiftService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="RecordCashMovementDto" Data="@Model" Submit="@OnSubmit">
+    <RadzenStack Gap="1rem">
+        <RadzenFormField Text="Type" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenDropDown @bind-Value="Model.MovementType" Data="@_types" Style="width:100%" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Amount (Rs)" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenNumeric @bind-Value="Model.Amount" Min="0.01m" />
+        </RadzenFormField>
+
+        <RadzenFormField Text="Reason / notes" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea @bind-Value="Model.Notes" Rows="2" />
+        </RadzenFormField>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="save" Text="Record" IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public Guid ShiftId { get; set; }
+
+    private RecordCashMovementDto Model = new();
+    private static readonly string[] _types = ["CashIn", "CashOut"];
+    private bool _saving;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        Model.ShiftId = ShiftId;
+        Model.MovementType = "CashIn";
+    }
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+        var result = await ShiftService.RecordCashMovementAsync(Model);
+        _saving = false;
+
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

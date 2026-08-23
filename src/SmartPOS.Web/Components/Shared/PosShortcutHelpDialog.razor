@@ -1,0 +1,66 @@
+@inject DialogService DialogService
+
+<div class="shortcut-help">
+    <p class="shortcut-help-intro">
+        These shortcuts are active on the POS billing screen. You can change them from Setup → POS Shortcuts.
+    </p>
+
+    <div class="shortcut-help-grid">
+        @foreach (var group in Groups)
+        {
+            <section class="shortcut-help-card">
+                <h4>@group.Title</h4>
+                @foreach (var item in group.Items)
+                {
+                    <div class="shortcut-help-row">
+                        <kbd>@item.Keys</kbd>
+                        <span>@item.Action</span>
+                    </div>
+                }
+            </section>
+        }
+    </div>
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Style="margin-top:1rem">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Primary" Click="@(() => DialogService.Close())" />
+    </RadzenStack>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<PosShortcutSettingDto> Shortcuts { get; set; } = [];
+
+    private IReadOnlyList<ShortcutGroup> Groups => BuildGroups();
+
+    private IReadOnlyList<ShortcutGroup> BuildGroups()
+    {
+        var active = Shortcuts
+            .Where(s => s.IsEnabled)
+            .OrderBy(s => s.SortOrder)
+            .Select(s => new ShortcutItem(s.ShortcutText, s.ActionName, s.IsCartShortcut))
+            .ToList();
+
+        if (active.Count == 0)
+        {
+            active =
+            [
+                new("F1", "Open this help window", false),
+                new("F2", "Focus barcode / SKU scan box", false),
+                new("F4", "Open customer dropdown", false),
+                new("F8", "Open split payment dialog", false),
+                new("Alt + Q", "Open exact quantity popup", true),
+                new("Alt + J", "Open customer display", false),
+                new("Delete", "Remove selected item", true)
+            ];
+        }
+
+        return
+        [
+            new("Main actions", active.Where(x => !x.IsCartShortcut).Take(10).ToList()),
+            new("Cart actions", active.Where(x => x.IsCartShortcut || x.Action.Contains("quantity", StringComparison.OrdinalIgnoreCase) || x.Action.Contains("cart", StringComparison.OrdinalIgnoreCase)).ToList()),
+            new("Tip", [new ShortcutItem("Setup", "Change these keys from Setup → POS Shortcuts.", false)])
+        ];
+    }
+
+    private sealed record ShortcutGroup(string Title, IReadOnlyList<ShortcutItem> Items);
+    private sealed record ShortcutItem(string Keys, string Action, bool IsCartShortcut);
+}

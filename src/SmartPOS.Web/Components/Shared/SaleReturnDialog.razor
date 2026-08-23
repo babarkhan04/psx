@@ -1,0 +1,244 @@
+@inject IPosService PosService
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    @if (_loading)
+    {
+        <RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" />
+    }
+    else if (_sale is null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">Sale not found.</RadzenAlert>
+    }
+    else if (_sale.Lines.Count == 0)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" AllowClose="false">All items on this sale have already been returned.</RadzenAlert>
+    }
+    else
+    {
+        <div class="receive-payment-summary">
+            <div><span>Sale</span><strong>@_sale.SaleNumber</strong></div>
+            <div><span>Customer</span><strong>@_sale.CustomerName</strong></div>
+            <div><span>Original payment</span><strong>@_sale.OriginalPaymentMethod</strong></div>
+            <div><span>Returnable</span><strong>@ReturnableTotal.ToString("C2")</strong></div>
+        </div>
+
+        <RadzenRow Gap="1rem">
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Return type" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenDropDown @bind-Value="_returnType" Data="@_returnTypes" Change="@(_ => OnReturnTypeChanged())" Style="width:100%" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Refund / settlement method" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenDropDown @bind-Value="_refundMethod" Data="@_refundMethods" Style="width:100%" />
+                </RadzenFormField>
+            </RadzenColumn>
+            <RadzenColumn Size="12" SizeMD="4">
+                <RadzenFormField Text="Reference" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="_reference" Placeholder="Card auth, exchange sale #, etc." Style="width:100%" />
+                </RadzenFormField>
+            </RadzenColumn>
+        </RadzenRow>
+
+        <RadzenFormField Text="Return reason" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea @bind-Value="_returnReason" Rows="2" Placeholder="Required, e.g. wrong size, damaged item, customer changed mind" />
+        </RadzenFormField>
+
+        <RadzenDataGrid Data="@_lines" TItem="ReturnLineRow" AllowPaging="false">
+            <Columns>
+                <RadzenDataGridColumn TItem="ReturnLineRow" Property="ProductName" Title="Product" />
+                <RadzenDataGridColumn TItem="ReturnLineRow" Property="Sku" Title="SKU" Width="120px" />
+                <RadzenDataGridColumn TItem="ReturnLineRow" Title="Returnable" Width="100px" TextAlign="TextAlign.Center">
+                    <Template Context="r">@r.Returnable.ToString("0.###")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReturnLineRow" Title="Return qty" Width="130px">
+                    <Template Context="r">
+                        <RadzenNumeric TValue="decimal" @bind-Value="r.Quantity" Style="width:100%" />
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReturnLineRow" Title="Disposition" Width="150px">
+                    <Template Context="r">
+                        <RadzenDropDown @bind-Value="r.Disposition" Data="@_dispositions" Style="width:100%" />
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReturnLineRow" Title="Line reason" Width="180px">
+                    <Template Context="r">
+                        <RadzenTextBox @bind-Value="r.LineReason" Placeholder="Optional" Style="width:100%" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+
+        <RadzenFormField Text="Notes (optional)" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea @bind-Value="_notes" Rows="2" />
+        </RadzenFormField>
+
+        <div class="receive-payment-summary">
+            <div><span>Selected qty</span><strong>@SelectedQuantity.ToString("0.###")</strong></div>
+            <div><span>Sellable restock</span><strong>@RestockQuantity.ToString("0.###")</strong></div>
+            <div><span>Damaged / discard</span><strong>@NonRestockQuantity.ToString("0.###")</strong></div>
+            <div><span>@(_returnType == "Exchange" ? "Exchange value" : "Refund total")</span><strong>@RefundTotal.ToString("C2")</strong></div>
+        </div>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        @if (_returnType == "Exchange")
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" AllowClose="false">
+                Exchange mode records returned items and their exchange value. Sell the replacement item in a new sale and enter its sale number/reference here.
+            </RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton Icon="undo" Text="Process return" ButtonStyle="ButtonStyle.Primary"
+                          IsBusy="@_saving" Disabled="@(_saving || RefundTotal <= 0)" Click="@SubmitAsync" />
+        </RadzenStack>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter] public Guid SaleId { get; set; }
+
+    private SaleForReturnDto? _sale;
+    private List<ReturnLineRow> _lines = [];
+    private string _returnType = "Refund";
+    private string _refundMethod = "Cash";
+    private string _returnReason = string.Empty;
+    private string? _reference;
+    private string? _notes;
+    private string? _error;
+    private bool _loading = true;
+    private bool _saving;
+
+    private static readonly string[] _returnTypes = ["Refund", "Exchange"];
+    private static readonly string[] _refundMethods = ["Cash", "Card", "Other", "Credit"];
+    private static readonly string[] _dispositions = ["Restock", "Damaged", "Discard"];
+
+    private decimal RefundTotal => _lines.Where(l => l.Quantity > 0).Sum(l =>
+    {
+        var sub = Math.Round(l.Quantity * l.DiscountedUnitPrice, 2);
+        return sub + Math.Round(sub * l.TaxRate / 100m, 2);
+    });
+
+    private decimal ReturnableTotal => _lines.Sum(l =>
+    {
+        var sub = Math.Round(l.Returnable * l.DiscountedUnitPrice, 2);
+        return sub + Math.Round(sub * l.TaxRate / 100m, 2);
+    });
+
+    private decimal SelectedQuantity => _lines.Where(l => l.Quantity > 0).Sum(l => l.Quantity);
+    private decimal RestockQuantity => _lines.Where(l => l.Quantity > 0 && l.Disposition == "Restock").Sum(l => l.Quantity);
+    private decimal NonRestockQuantity => _lines.Where(l => l.Quantity > 0 && l.Disposition != "Restock").Sum(l => l.Quantity);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _sale = await PosService.GetSaleForReturnAsync(SaleId);
+        if (_sale is not null)
+        {
+            _refundMethod = _sale.OriginalPaymentMethod is "Credit" or "Card" or "Cash" or "Other"
+                ? _sale.OriginalPaymentMethod
+                : "Cash";
+
+            _lines = _sale.Lines.Select(l => new ReturnLineRow
+            {
+                SaleLineId = l.SaleLineId,
+                Sku = l.Sku,
+                ProductName = l.ProductName,
+                Returnable = l.QuantityReturnable,
+                Quantity = l.QuantityReturnable,
+                UnitPrice = l.UnitPrice,
+                DiscountedUnitPrice = l.DiscountedUnitPrice <= 0 ? l.UnitPrice : l.DiscountedUnitPrice,
+                TaxRate = l.TaxRate,
+                Disposition = "Restock"
+            }).ToList();
+        }
+
+        _loading = false;
+    }
+
+    private void OnReturnTypeChanged()
+    {
+        if (_returnType == "Exchange" && _refundMethod == "Cash")
+        {
+            _refundMethod = "Other";
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _saving = true;
+        _error = null;
+
+        var selectedLines = _lines.Where(l => l.Quantity > 0).ToList();
+        if (selectedLines.Count == 0)
+        {
+            _error = "Select at least one item to return.";
+            _saving = false;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_returnReason) || _returnReason.Trim().Length < 3)
+        {
+            _error = "Return reason is required.";
+            _saving = false;
+            return;
+        }
+
+        var invalidLine = selectedLines.FirstOrDefault(l => l.Quantity > l.Returnable);
+        if (invalidLine is not null)
+        {
+            _error = $"Return quantity for {invalidLine.Sku} cannot exceed {invalidLine.Returnable:0.###}.";
+            _saving = false;
+            return;
+        }
+
+        var dto = new ProcessReturnDto
+        {
+            SaleId = SaleId,
+            ReturnType = _returnType,
+            RefundMethod = _refundMethod,
+            ReturnReason = _returnReason.Trim(),
+            RefundReference = _returnType == "Refund" ? _reference?.Trim() : null,
+            ExchangeReference = _returnType == "Exchange" ? _reference?.Trim() : null,
+            Notes = _notes,
+            Lines = selectedLines.Select(l => new SaleReturnLineInputDto
+            {
+                SaleLineId = l.SaleLineId,
+                QuantityReturned = l.Quantity,
+                Disposition = l.Disposition,
+                LineReason = l.LineReason
+            }).ToList()
+        };
+
+        var result = await PosService.ProcessReturnAsync(dto);
+        _saving = false;
+
+        if (result.Succeeded && result.Data is not null)
+        {
+            DialogService.Close(result.Data);
+        }
+        else
+        {
+            _error = result.Error ?? "Return failed.";
+        }
+    }
+
+    private sealed class ReturnLineRow
+    {
+        public Guid SaleLineId { get; set; }
+        public string Sku { get; set; } = string.Empty;
+        public string ProductName { get; set; } = string.Empty;
+        public decimal Returnable { get; set; }
+        public decimal Quantity { get; set; }
+        public decimal UnitPrice { get; set; }
+        public decimal DiscountedUnitPrice { get; set; }
+        public decimal TaxRate { get; set; }
+        public string Disposition { get; set; } = "Restock";
+        public string? LineReason { get; set; }
+    }
+}

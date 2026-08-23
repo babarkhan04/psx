@@ -1,0 +1,263 @@
+/* Step 27: Professional POS receipt preview and print layout */
+.sp-receipt-dialog-shell {
+    padding: 0.25rem;
+}
+
+.sp-receipt-preview-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--sp-border, #e5e7eb);
+}
+
+.sp-receipt-preview-toolbar strong {
+    display: block;
+    color: var(--sp-text, #111827);
+    font-size: 1rem;
+}
+
+.sp-receipt-preview-toolbar span {
+    display: block;
+    color: var(--sp-text-muted, #64748b);
+    font-size: 0.82rem;
+    margin-top: 0.15rem;
+}
+
+.sp-receipt-print-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.sp-print-receipt-preview {
+    background: #fff;
+    color: #111827;
+    border: 1px solid #e5e7eb;
+    border-radius: 18px;
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+    max-height: 68vh;
+    overflow: auto;
+}
+
+.sp-print-receipt {
+    padding: 18px;
+    font-family: Inter, Arial, sans-serif;
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+.sp-print-receipt-header {
+    text-align: center;
+}
+
+.sp-print-receipt-brand {
+    font-size: 18px;
+    line-height: 1.15;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+}
+
+.sp-print-receipt-subtitle,
+.sp-print-receipt-number,
+.sp-print-receipt-date,
+.sp-print-receipt-footer small,
+.sp-print-receipt-item small {
+    color: #64748b;
+}
+
+.sp-print-receipt-divider {
+    border-top: 1px dashed #cbd5e1;
+    margin: 10px 0;
+}
+
+.sp-print-receipt-number {
+    font-weight: 700;
+    font-size: 12px;
+}
+
+.sp-print-receipt-duplicate {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 3px 8px;
+    border: 1px solid #fb7185;
+    border-radius: 999px;
+    color: #be123c;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+}
+
+.sp-print-receipt-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 12px;
+    margin: 14px 0;
+    padding: 10px;
+    background: #f8fafc;
+    border-radius: 12px;
+}
+
+.sp-print-receipt-meta-grid div {
+    min-width: 0;
+}
+
+.sp-print-receipt-meta-grid span {
+    display: block;
+    color: #64748b;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.sp-print-receipt-meta-grid strong {
+    display: block;
+    color: #111827;
+    font-size: 11px;
+    word-break: break-word;
+}
+
+.sp-print-receipt-meta-wide {
+    grid-column: 1 / -1;
+}
+
+.sp-print-receipt-items {
+    border-top: 1px dashed #cbd5e1;
+    border-bottom: 1px dashed #cbd5e1;
+    padding: 8px 0;
+}
+
+.sp-print-receipt-items-head,
+.sp-print-receipt-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 46px 82px;
+    gap: 8px;
+    align-items: start;
+}
+
+.sp-print-receipt-items-head {
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-bottom: 6px;
+}
+
+.sp-print-receipt-items-head span:nth-child(2),
+.sp-print-receipt-items-head span:nth-child(3),
+.sp-print-receipt-item-qty,
+.sp-print-receipt-item-total {
+    text-align: right;
+}
+
+.sp-print-receipt-item {
+    padding: 7px 0;
+    border-top: 1px solid #f1f5f9;
+}
+
+.sp-print-receipt-item:first-of-type {
+    border-top: 0;
+}
+
+.sp-print-receipt-item-name strong {
+    display: block;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.sp-print-receipt-item-name small {
+    display: block;
+    font-size: 10px;
+    margin-top: 1px;
+}
+
+.sp-print-receipt-totals {
+    margin-top: 10px;
+}
+
+.sp-print-receipt-totals div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 3px 0;
+}
+
+.sp-print-receipt-totals span {
+    color: #475569;
+}
+
+.sp-print-receipt-grand {
+    margin-top: 6px;
+    padding-top: 8px !important;
+    border-top: 2px solid #111827;
+    font-size: 15px;
+    font-weight: 900;
+}
+
+.sp-print-receipt-grand span,
+.sp-print-receipt-grand strong {
+    color: #111827;
+}
+
+.sp-print-receipt-footer {
+    text-align: center;
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px dashed #cbd5e1;
+}
+
+.sp-print-receipt-code {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 160px;
+    padding: 8px 10px;
+    border: 1px dashed #94a3b8;
+    border-radius: 10px;
+    margin-bottom: 8px;
+}
+
+.sp-print-receipt-code span {
+    color: #64748b;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.sp-print-receipt-code strong {
+    font-size: 12px;
+}
+
+.sp-print-receipt-footer p {
+    margin: 4px 0;
+    font-weight: 800;
+}
+
+.sp-print-receipt-footer small {
+    display: block;
+    font-size: 10px;
+    margin-top: 4px;
+}
+
+.sp-print-receipt-system {
+    margin-top: 8px !important;
+}
+
+.sp-receipt-reprint-panel {
+    margin-top: 1rem;
+}
+
+@media (max-width: 640px) {
+    .sp-receipt-preview-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .sp-receipt-print-actions .rz-button {
+        flex: 1;
+    }
+}

@@ -1,0 +1,175 @@
+@page "/customers"
+@attribute [Authorize(Policy = Permissions.Relationships.CustomersView)]
+@inject ICustomerService CustomerService
+@inject DialogService DialogService
+@inject NotificationService Notifications
+
+<PageTitle>Customers · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Customers</h1>
+        <p class="page-subtitle">Customer profiles and credit (udhaar) accounts.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenTextBox @bind-Value="_search" Placeholder="Search name, phone, city…" Style="min-width:240px"
+                       @oninput="@(args => _search = args.Value?.ToString())" Change="@(_ => LoadAsync())" />
+        <RadzenButton Icon="search" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" />
+        <RadzenButton Icon="person_add" Text="New customer" Click="@(() => OpenEditor(null))" Disabled="@(!_canManage)" />
+    </div>
+</div>
+
+<div class="kpi-grid">
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Customers</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="groups" /></span></div>
+        <div class="kpi-value">@_customers.Count</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Total receivable (udhaar)</span><span class="kpi-chip chip-cash"><RadzenIcon Icon="account_balance_wallet" /></span></div>
+        <div class="kpi-value">@_customers.Sum(c => c.Balance).ToString("C0")</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-top"><span class="kpi-label">Over limit</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="warning" /></span></div>
+        <div class="kpi-value">@_customers.Count(c => c.OverLimit)</div>
+    </div>
+</div>
+
+<RadzenCard class="content-card grid-card">
+    <RadzenDataGrid Data="@_customers" TItem="CustomerListItemDto" AllowSorting="true" AllowPaging="true"
+                    PageSize="12" EmptyText="No customers found." IsLoading="@_loading">
+        <Columns>
+            <RadzenDataGridColumn TItem="CustomerListItemDto" Property="Name" Title="Customer" />
+            <RadzenDataGridColumn TItem="CustomerListItemDto" Property="Phone" Title="Phone" Width="150px" />
+            <RadzenDataGridColumn TItem="CustomerListItemDto" Property="City" Title="City" Width="130px" />
+            <RadzenDataGridColumn TItem="CustomerListItemDto" Property="CreditLimit" Title="Credit limit" Width="130px" TextAlign="TextAlign.End">
+                <Template Context="c">@(c.CreditLimit > 0 ? c.CreditLimit.ToString("C0") : "—")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="CustomerListItemDto" Property="Balance" Title="Balance (udhaar)" Width="150px" TextAlign="TextAlign.End">
+                <Template Context="c">
+                    <strong class="@(c.OverLimit ? "text-warn" : c.Balance > 0 ? "" : "text-ok")">@c.Balance.ToString("C2")</strong>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="CustomerListItemDto" Property="IsActive" Title="Status" Width="100px" TextAlign="TextAlign.Center">
+                <Template Context="c">
+                    <span class="status-pill @(c.IsActive ? "on" : "off")">@(c.IsActive ? "Active" : "Inactive")</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="CustomerListItemDto" Title="" Width="230px" Sortable="false" TextAlign="TextAlign.End">
+                <Template Context="c">
+                    <RadzenButton Icon="payments" Text="Receive" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => ReceivePayment(c))" Disabled="@(!_canManage || c.Balance <= 0)" Title="Receive payment" />
+                    <RadzenButton Icon="history" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => ViewLedger(c))" Style="margin-left:0.35rem" Title="Ledger" />
+                    <RadzenButton Icon="edit" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => OpenEditor(c))" Disabled="@(!_canManage)" Style="margin-left:0.35rem" />
+                    <RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => DeleteAsync(c))" Disabled="@(!_canManage)" Style="margin-left:0.35rem" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private IReadOnlyList<CustomerListItemDto> _customers = [];
+    private string? _search;
+    private bool _loading = true;
+    private bool _canManage;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _canManage = state.User.HasClaim(Permissions.ClaimType, Permissions.Relationships.CustomersManage);
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        _customers = await CustomerService.GetAllAsync(_search);
+        _loading = false;
+    }
+
+    private async Task OpenEditor(CustomerListItemDto? item)
+    {
+        if (!_canManage)
+        {
+            return;
+        }
+
+        var model = item is null
+            ? new CustomerDto { IsActive = true }
+            : await CustomerService.GetAsync(item.Id) ?? new CustomerDto { IsActive = true };
+
+        var saved = await DialogService.OpenAsync<CustomerDialog>(
+            item is null ? "New customer" : $"Edit · {item.Name}",
+            new Dictionary<string, object?> { [nameof(CustomerDialog.Model)] = model },
+            new DialogOptions { Width = "640px", CloseDialogOnOverlayClick = false });
+
+        if (saved is true)
+        {
+            await LoadAsync();
+            Notify("Saved", "Customer saved.", NotificationSeverity.Success);
+        }
+    }
+
+    private async Task ReceivePayment(CustomerListItemDto c)
+    {
+        var saved = await DialogService.OpenAsync<ReceivePaymentDialog>(
+            $"Receive payment · {c.Name}",
+            new Dictionary<string, object?>
+            {
+                [nameof(ReceivePaymentDialog.CustomerId)] = c.Id,
+                [nameof(ReceivePaymentDialog.CustomerName)] = c.Name,
+                [nameof(ReceivePaymentDialog.CurrentBalance)] = c.Balance
+            },
+            new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = false });
+
+        if (saved is true)
+        {
+            await LoadAsync();
+            Notify("Payment received", "Customer balance updated.", NotificationSeverity.Success);
+        }
+    }
+
+    private async Task ViewLedger(CustomerListItemDto c)
+    {
+        await DialogService.OpenAsync<CustomerLedgerDialog>(
+            $"Ledger · {c.Name}",
+            new Dictionary<string, object?> { [nameof(CustomerLedgerDialog.CustomerId)] = c.Id },
+            new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = true });
+    }
+
+    private async Task DeleteAsync(CustomerListItemDto c)
+    {
+        var confirmed = await DialogService.Confirm(
+            $"Delete customer '{c.Name}'?", "Delete customer",
+            new ConfirmOptions { OkButtonText = "Delete", CancelButtonText = "Cancel" });
+
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        var result = await CustomerService.DeleteAsync(c.Id);
+        if (result.Succeeded)
+        {
+            await LoadAsync();
+            Notify("Deleted", "Customer removed.", NotificationSeverity.Success);
+        }
+        else
+        {
+            Notify("Could not delete", result.Error ?? "Unknown error", NotificationSeverity.Error);
+        }
+    }
+
+    private void Notify(string summary, string detail, NotificationSeverity severity) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4000 });
+}

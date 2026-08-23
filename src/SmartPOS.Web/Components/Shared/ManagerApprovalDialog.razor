@@ -1,0 +1,100 @@
+@inject IManagerApprovalService ManagerApprovalService
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    <RadzenAlert AlertStyle="AlertStyle.Warning" Variant="Variant.Flat" AllowClose="false">
+        Manager approval is required for this action. Enter a manager account with Store Manager, Business Owner, or Super Admin role.
+    </RadzenAlert>
+
+    <div class="receive-payment-summary">
+        <div><span>Action</span><strong>@ApprovalType</strong></div>
+        @if (!string.IsNullOrWhiteSpace(Reference))
+        {
+            <div><span>Reference</span><strong>@Reference</strong></div>
+        }
+        @if (Amount is not null)
+        {
+            <div><span>Amount</span><strong>@Amount.Value.ToString("C2")</strong></div>
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Message))
+    {
+        <p style="margin:0;color:var(--rz-text-secondary-color)">@Message</p>
+    }
+
+    <RadzenFormField Text="Manager email" Variant="Variant.Outlined" Style="width:100%">
+        <RadzenTextBox @bind-Value="_managerEmail" Style="width:100%" />
+    </RadzenFormField>
+
+    <RadzenFormField Text="Manager password" Variant="Variant.Outlined" Style="width:100%">
+        <RadzenPassword @bind-Value="_managerPassword" Style="width:100%" />
+    </RadzenFormField>
+
+    <RadzenFormField Text="Approval reason" Variant="Variant.Outlined" Style="width:100%">
+        <RadzenTextArea @bind-Value="_reason" Rows="3" Placeholder="Why is approval needed?" />
+    </RadzenFormField>
+
+    @if (!string.IsNullOrWhiteSpace(_error))
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+    }
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+        <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(null))" />
+        <RadzenButton Text="Approve" Icon="verified_user" ButtonStyle="ButtonStyle.Primary" IsBusy="@_saving"
+                      Disabled="@(_saving || string.IsNullOrWhiteSpace(_managerEmail) || string.IsNullOrWhiteSpace(_managerPassword) || string.IsNullOrWhiteSpace(_reason) || _reason.Trim().Length < 3)"
+                      Click="@ApproveAsync" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    [Parameter] public Guid? StoreId { get; set; }
+    [Parameter] public ManagerApprovalType ApprovalType { get; set; } = ManagerApprovalType.Discount;
+    [Parameter] public string? Reference { get; set; }
+    [Parameter] public decimal? Amount { get; set; }
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public string? DefaultReason { get; set; }
+
+    private string? _managerEmail;
+    private string? _managerPassword;
+    private string? _reason;
+    private string? _error;
+    private bool _saving;
+
+    protected override void OnParametersSet()
+    {
+        if (string.IsNullOrWhiteSpace(_reason))
+        {
+            _reason = DefaultReason;
+        }
+    }
+
+    private async Task ApproveAsync()
+    {
+        _saving = true;
+        _error = null;
+
+        var result = await ManagerApprovalService.ApproveAsync(new ManagerApprovalRequestDto
+        {
+            StoreId = StoreId,
+            ApprovalType = ApprovalType,
+            ManagerEmail = _managerEmail ?? string.Empty,
+            ManagerPassword = _managerPassword ?? string.Empty,
+            Reference = Reference,
+            Amount = Amount,
+            Reason = _reason ?? string.Empty
+        });
+
+        _saving = false;
+
+        if (result.Succeeded && result.Data is not null)
+        {
+            DialogService.Close(result.Data);
+        }
+        else
+        {
+            _error = result.Error ?? "Manager approval failed.";
+        }
+    }
+}

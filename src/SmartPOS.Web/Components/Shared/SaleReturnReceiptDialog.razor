@@ -1,0 +1,51 @@
+@inject DialogService DialogService
+
+<div class="pos-receipt">
+    <div class="pos-receipt-header">
+        <RadzenIcon Icon="undo" />
+        <h3>@(Receipt.ReturnType == "Exchange" ? "Exchange return processed" : "Return processed")</h3>
+        <p>@Receipt.ReturnNumber</p>
+    </div>
+    <p class="pos-receipt-meta">Original sale: @Receipt.OriginalSaleNumber · @Receipt.ProcessedOn.ToLocalTime().ToString("dd MMM yyyy · h:mm tt")</p>
+    <p class="pos-receipt-meta">@Receipt.ReturnType · @SettlementLabel · @Receipt.CustomerName</p>
+    <p class="pos-receipt-meta"><strong>Reason:</strong> @Receipt.ReturnReason</p>
+    @if (!string.IsNullOrWhiteSpace(Receipt.RefundReference) || !string.IsNullOrWhiteSpace(Receipt.ExchangeReference))
+    {
+        <p class="pos-receipt-meta"><strong>Reference:</strong> @(Receipt.ExchangeReference ?? Receipt.RefundReference)</p>
+    }
+
+    <div class="pos-receipt-lines">
+        @foreach (var line in Receipt.Lines)
+        {
+            <div class="pos-receipt-line">
+                <div>
+                    <strong>@line.ProductName</strong>
+                    <span>@line.Sku · @line.QuantityReturned.ToString("0.###") · @line.Disposition</span>
+                    @if (!string.IsNullOrWhiteSpace(line.LineReason))
+                    {
+                        <span>@line.LineReason</span>
+                    }
+                </div>
+                <span>@line.LineTotal.ToString("C2")</span>
+            </div>
+        }
+    </div>
+
+    <div class="pos-receipt-totals">
+        <div><span>Subtotal</span><span>@Receipt.Subtotal.ToString("C2")</span></div>
+        <div><span>Tax</span><span>@Receipt.TaxAmount.ToString("C2")</span></div>
+        <div class="pos-total-due"><span>@(Receipt.ReturnType == "Exchange" ? "Exchange value" : "Refunded")</span><span>@Receipt.TotalAmount.ToString("C2")</span></div>
+    </div>
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem" Style="margin-top:1rem">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Primary" Click="@(() => DialogService.Close(true))" />
+    </RadzenStack>
+</div>
+
+@code {
+    [Parameter] public SaleReturnReceiptDto Receipt { get; set; } = new();
+
+    private string SettlementLabel => Receipt.ReturnType == "Exchange"
+        ? $"Exchange via {Receipt.RefundMethod}"
+        : $"Refund via {Receipt.RefundMethod}";
+}

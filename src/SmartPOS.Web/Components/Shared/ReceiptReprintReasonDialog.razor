@@ -1,0 +1,35 @@
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="ReceiptReprintRequestDto" Data="@Model" Submit="@OnSubmit">
+    <RadzenStack Gap="1rem">
+        <RadzenAlert AlertStyle="AlertStyle.Info" Variant="Variant.Flat" AllowClose="false">
+            Receipt reprints are audited. Enter why this duplicate receipt is being printed.
+        </RadzenAlert>
+
+        <RadzenFormField Text="Reprint reason" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea Name="Reason" @bind-Value="Model.Reason" Rows="3" Placeholder="Example: Customer requested duplicate, printer failed, finance copy..." />
+        </RadzenFormField>
+        <RadzenRequiredValidator Component="Reason" Text="Reason is required." />
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(null))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="print" Text="Continue printing" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public Guid SaleId { get; set; }
+
+    private ReceiptReprintRequestDto Model = new();
+
+    protected override void OnInitialized()
+    {
+        Model.SaleId = SaleId;
+    }
+
+    private void OnSubmit()
+    {
+        DialogService.Close(Model);
+    }
+}

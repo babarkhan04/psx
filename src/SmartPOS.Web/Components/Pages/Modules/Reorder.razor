@@ -1,0 +1,432 @@
+@page "/reorder"
+@attribute [Authorize(Policy = Permissions.Catalog.ReorderView)]
+@inject IReorderService ReorderService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject ISupplierService SupplierService
+@inject NotificationService Notifications
+@inject NavigationManager Nav
+@inject DialogService DialogService
+
+<PageTitle>Smart Reorder · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Smart Reorder Suggestions</h1>
+        <p class="page-subtitle">Purchase and transfer recommendations based on stock, sales velocity, supplier lead time, safety stock, incoming purchases, and dead-stock movement.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenButton Icon="refresh" Text="Refresh" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" Disabled="@_loading" />
+        <RadzenButton Icon="shopping_cart_checkout" Text="Create draft POs" ButtonStyle="ButtonStyle.Primary" Click="@CreatePurchaseDraftsForVisibleAsync" Disabled="@(_busy || _model is null || !_model.PurchaseSuggestions.Any())" />
+    </div>
+</div>
+
+<RadzenCard class="content-card" style="margin-bottom:1rem">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="1rem" AlignItems="AlignItems.End" Wrap="FlexWrap.Wrap">
+        <div>
+            <RadzenLabel Text="Store" />
+            <RadzenDropDown TValue="Guid?" @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Name" ValueProperty="Id"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                            Change="@(_ => LoadAsync())" Style="min-width:240px" />
+        </div>
+        <div>
+            <RadzenLabel Text="Search" />
+            <RadzenTextBox @bind-Value="_search" Placeholder="SKU, barcode, product" Style="width:230px" @onkeydown="@SearchKeyDown" />
+        </div>
+        <div>
+            <RadzenLabel Text="Lookback" />
+            <RadzenDropDown TValue="int" @bind-Value="_lookbackDays" Data="@_lookbackOptions" Change="@(_ => LoadAsync())" Style="width:130px" />
+        </div>
+        <div>
+            <RadzenLabel Text="Lead time days" />
+            <RadzenNumeric TValue="int" @bind-Value="_leadTimeDays" Style="width:130px" />
+        </div>
+        <div>
+            <RadzenLabel Text="Safety days" />
+            <RadzenNumeric TValue="int" @bind-Value="_safetyStockDays" Style="width:120px" />
+        </div>
+        <div>
+            <RadzenLabel Text="Dead stock days" />
+            <RadzenNumeric TValue="int" @bind-Value="_deadStockDays" Style="width:140px" />
+        </div>
+        <div style="min-width:240px">
+            <RadzenLabel Text="Fallback supplier" />
+            <RadzenDropDown TValue="Guid?" @bind-Value="_defaultSupplierId" Data="@_supplierOptions" TextProperty="Display" ValueProperty="Id"
+                            AllowClear="true" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Style="width:100%" Placeholder="Use if product has no supplier history" />
+        </div>
+        <label class="rz-display-flex rz-align-items-center rz-gap-2" style="white-space:nowrap;margin-bottom:0.45rem">
+            <RadzenCheckBox TValue="bool" @bind-Value="_preferTransfers" Change="@(_ => LoadAsync())" />
+            <span>Prefer transfers</span>
+        </label>
+        <label class="rz-display-flex rz-align-items-center rz-gap-2" style="white-space:nowrap;margin-bottom:0.45rem">
+            <RadzenCheckBox TValue="bool" @bind-Value="_includeHealthy" Change="@(_ => LoadAsync())" />
+            <span>Healthy items</span>
+        </label>
+        <label class="rz-display-flex rz-align-items-center rz-gap-2" style="white-space:nowrap;margin-bottom:0.45rem">
+            <RadzenCheckBox TValue="bool" @bind-Value="_includeDeadStock" Change="@(_ => LoadAsync())" />
+            <span>Dead stock</span>
+        </label>
+        <RadzenButton Icon="manage_search" Text="Apply" Click="@LoadAsync" Disabled="@_loading" />
+    </RadzenStack>
+</RadzenCard>
+
+@if (_loading)
+{
+    <div class="customer-ledger-loading"><RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" /></div>
+}
+else if (_model is not null)
+{
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Total suggestions</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="tips_and_updates" /></span></div>
+            <div class="kpi-value">@_model.Summary.TotalSuggestions</div>
+            <div class="page-subtitle">@_model.Summary.CriticalCount critical</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Purchase needed</span><span class="kpi-chip chip-sales"><RadzenIcon Icon="shopping_cart" /></span></div>
+            <div class="kpi-value">@_model.Summary.PurchaseCount</div>
+            <div class="page-subtitle">Estimated @Money(_model.Summary.EstimatedPurchaseValue)</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Transfer instead</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="swap_horiz" /></span></div>
+            <div class="kpi-value">@_model.Summary.TransferCount</div>
+            <div class="page-subtitle">@Qty(_model.Summary.EstimatedTransferQuantity) units suggested</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Dead / stockout</span><span class="kpi-chip chip-cash"><RadzenIcon Icon="warning" /></span></div>
+            <div class="kpi-value">@(_model.Summary.DeadStockCount + _model.Summary.StockoutCount)</div>
+            <div class="page-subtitle">@_model.Summary.DeadStockCount dead · @_model.Summary.StockoutCount stockout</div>
+        </div>
+    </div>
+
+    <RadzenTabs>
+        <Tabs>
+            <RadzenTabsItem Text="All suggestions">
+                @SuggestionGrid(_model.Suggestions, "No reorder suggestions found.")
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Purchase">
+                @SuggestionGrid(_model.PurchaseSuggestions, "No purchase suggestions found.")
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Transfer">
+                @SuggestionGrid(_model.TransferSuggestions, "No transfer suggestions found.")
+            </RadzenTabsItem>
+            <RadzenTabsItem Text="Dead stock">
+                @SuggestionGrid(_model.DeadStockWarnings, "No dead stock warnings found.")
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+}
+
+@code {
+    private ReorderDashboardDto? _model;
+    private IReadOnlyList<StoreDto> _stores = [];
+    private List<LookupDto> _storeOptions = [];
+    private IReadOnlyList<SupplierLookupDto> _supplierOptions = [];
+
+    private Guid? _storeId;
+    private Guid? _defaultSupplierId;
+    private string? _search;
+    private int _lookbackDays = 30;
+    private int _leadTimeDays = 7;
+    private int _safetyStockDays = 3;
+    private int _deadStockDays = 60;
+    private bool _preferTransfers = true;
+    private bool _includeHealthy;
+    private bool _includeDeadStock = true;
+    private bool _loading;
+    private bool _busy;
+
+    private readonly List<int> _lookbackOptions = [7, 14, 30, 60, 90, 180];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeOptions = [new LookupDto { Id = Guid.Empty, Name = "All stores" }, .._stores.Select(s => new LookupDto { Id = s.Id, Name = $"{s.Code} · {s.Name}" })];
+        if (StoreContext.StoreId is { } selectedStore && _stores.Any(s => s.Id == selectedStore))
+        {
+            _storeId = selectedStore;
+        }
+
+        _supplierOptions = await SupplierService.GetLookupAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _model = await ReorderService.GetReorderDashboardAsync(new ReorderQueryDto
+            {
+                StoreId = _storeId is { } id && id != Guid.Empty ? id : null,
+                Search = _search,
+                LookbackDays = _lookbackDays,
+                LeadTimeDays = _leadTimeDays,
+                SafetyStockDays = _safetyStockDays,
+                DeadStockDays = _deadStockDays,
+                IncludeHealthy = _includeHealthy,
+                IncludeDeadStock = _includeDeadStock,
+                PreferTransfers = _preferTransfers,
+                Take = 1000
+            });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task SearchKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+        {
+            await LoadAsync();
+        }
+    }
+
+    private RenderFragment SuggestionGrid(IReadOnlyList<ReorderSuggestionDto> rows, string emptyText) => @<RadzenCard class="content-card grid-card" style="margin-top:1rem">
+        <RadzenDataGrid Data="@rows" TItem="ReorderSuggestionDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" Density="Density.Compact" EmptyText="@emptyText">
+            <Columns>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="Severity" Title="Risk" Width="105px">
+                    <Template Context="row"><RadzenBadge BadgeStyle="@SeverityStyle(row.Severity)" Text="@row.Severity" /></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="ActionType" Title="Action" Width="145px">
+                    <Template Context="row"><strong>@row.ActionType</strong></Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="StoreName" Title="Store" Width="190px" />
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="Sku" Title="SKU" Width="120px" />
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="ProductName" Title="Product" Width="250px">
+                    <Template Context="row">
+                        <strong>@row.ProductName</strong>
+                        @if (!string.IsNullOrWhiteSpace(row.VariantName))
+                        {
+                            <div class="page-subtitle">@row.VariantName</div>
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="CategoryName" Title="Category" Width="140px" />
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="CurrentStock" Title="Stock" Width="95px" TextAlign="TextAlign.End">
+                    <Template Context="row">@Qty(row.CurrentStock)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="ReorderLevel" Title="Reorder" Width="95px" TextAlign="TextAlign.End">
+                    <Template Context="row">@Qty(row.ReorderLevel)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="AverageDailySales" Title="Avg/day" Width="100px" TextAlign="TextAlign.End">
+                    <Template Context="row">@Qty(row.AverageDailySales)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="DaysOfStockLeft" Title="Days left" Width="105px" TextAlign="TextAlign.End">
+                    <Template Context="row">@(row.DaysOfStockLeft is null ? "-" : row.DaysOfStockLeft.Value.ToString("0.#"))</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="IncomingPurchaseQuantity" Title="Incoming PO" Width="115px" TextAlign="TextAlign.End">
+                    <Template Context="row">@Qty(row.IncomingPurchaseQuantity)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="IncomingTransferQuantity" Title="Incoming TRF" Width="120px" TextAlign="TextAlign.End">
+                    <Template Context="row">@Qty(row.IncomingTransferQuantity)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="SuggestedTransferQuantity" Title="Transfer" Width="105px" TextAlign="TextAlign.End">
+                    <Template Context="row">
+                        @if (row.SuggestedTransferQuantity > 0)
+                        {
+                            <strong>@Qty(row.SuggestedTransferQuantity)</strong>
+                            <div class="page-subtitle">from @row.SuggestedSourceStoreName</div>
+                        }
+                        else
+                        {
+                            <span>-</span>
+                        }
+                    </Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="SuggestedPurchaseQuantity" Title="Purchase" Width="105px" TextAlign="TextAlign.End">
+                    <Template Context="row">@(row.SuggestedPurchaseQuantity <= 0 ? "-" : Qty(row.SuggestedPurchaseQuantity))</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="EstimatedPurchaseCost" Title="Est. cost" Width="120px" TextAlign="TextAlign.End">
+                    <Template Context="row">@Money(row.EstimatedPurchaseCost)</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="SuggestedSupplierName" Title="Supplier" Width="180px">
+                    <Template Context="row">@(row.SuggestedSupplierName ?? "Use fallback")</Template>
+                </RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Property="Reason" Title="Reason" Width="300px" />
+                <RadzenDataGridColumn TItem="ReorderSuggestionDto" Title="Actions" Width="275px" TextAlign="TextAlign.Center">
+                    <Template Context="row">
+                        <RadzenButton Text="PO" Icon="shopping_cart" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Primary" Style="margin-right:0.25rem"
+                                      Disabled="@(_busy || row.SuggestedPurchaseQuantity <= 0)" Click="@(() => CreatePurchaseDraftAsync(row))" />
+                        <RadzenButton Text="Transfer" Icon="swap_horiz" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Success" Style="margin-right:0.25rem"
+                                      Disabled="@(_busy || row.SuggestedTransferQuantity <= 0 || row.SuggestedSourceStoreId is null)" Click="@(() => CreateTransferRequestAsync(row))" />
+                        <RadzenButton Text="Inventory" Icon="warehouse" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => OpenInventory())" />
+                    </Template>
+                </RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+    </RadzenCard>;
+
+    private async Task CreatePurchaseDraftAsync(ReorderSuggestionDto row)
+    {
+        var supplierId = row.SuggestedSupplierId ?? _defaultSupplierId;
+        if (supplierId is null || supplierId == Guid.Empty)
+        {
+            Notify(NotificationSeverity.Warning, "Supplier required", "Select a fallback supplier or create purchase history for this product first.");
+            return;
+        }
+
+        var confirmed = await DialogServiceConfirm($"Create draft purchase order for {Qty(row.SuggestedPurchaseQuantity)} unit(s) of {row.ProductName}?", "Create draft PO");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _busy = true;
+        var result = await ReorderService.CreatePurchaseDraftAsync(new CreateReorderPurchaseDraftDto
+        {
+            StoreId = row.StoreId,
+            SupplierId = supplierId.Value,
+            Notes = $"Smart Reorder: {row.Reason}",
+            Lines =
+            [
+                new CreateReorderPurchaseDraftLineDto
+                {
+                    ProductId = row.ProductId,
+                    ProductVariantId = row.ProductVariantId,
+                    Quantity = row.SuggestedPurchaseQuantity,
+                    UnitCost = row.LastUnitCost
+                }
+            ]
+        });
+        _busy = false;
+
+        if (!result.Succeeded)
+        {
+            Notify(NotificationSeverity.Error, "PO not created", result.Error ?? "Unable to create draft purchase order.");
+            return;
+        }
+
+        Notify(NotificationSeverity.Success, "Draft PO created", "A purchase draft was created from the reorder suggestion.");
+        await LoadAsync();
+    }
+
+    private async Task CreateTransferRequestAsync(ReorderSuggestionDto row)
+    {
+        if (row.SuggestedSourceStoreId is null || row.SuggestedTransferQuantity <= 0)
+        {
+            Notify(NotificationSeverity.Warning, "No transfer source", "This row does not have a valid source store suggestion.");
+            return;
+        }
+
+        var confirmed = await DialogServiceConfirm($"Create transfer request from {row.SuggestedSourceStoreName} to {row.StoreName} for {Qty(row.SuggestedTransferQuantity)} unit(s) of {row.ProductName}?", "Create transfer request");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _busy = true;
+        var result = await ReorderService.CreateTransferRequestAsync(new CreateReorderTransferRequestDto
+        {
+            SourceStoreId = row.SuggestedSourceStoreId.Value,
+            DestinationStoreId = row.StoreId,
+            Notes = $"Smart Reorder: {row.Reason}",
+            Lines =
+            [
+                new CreateReorderTransferRequestLineDto
+                {
+                    ProductId = row.ProductId,
+                    ProductVariantId = row.ProductVariantId,
+                    Quantity = row.SuggestedTransferQuantity
+                }
+            ]
+        });
+        _busy = false;
+
+        if (!result.Succeeded)
+        {
+            Notify(NotificationSeverity.Error, "Transfer not created", result.Error ?? "Unable to create transfer request.");
+            return;
+        }
+
+        Notify(NotificationSeverity.Success, "Transfer requested", "A stock transfer request was created from the reorder suggestion.");
+        await LoadAsync();
+    }
+
+    private async Task CreatePurchaseDraftsForVisibleAsync()
+    {
+        if (_model is null)
+        {
+            return;
+        }
+
+        var rows = _model.PurchaseSuggestions.Where(r => r.SuggestedPurchaseQuantity > 0).ToList();
+        if (rows.Count == 0)
+        {
+            Notify(NotificationSeverity.Info, "No rows", "There are no purchase suggestions to convert.");
+            return;
+        }
+
+        var rowsMissingSupplier = rows.Where(r => r.SuggestedSupplierId is null && (_defaultSupplierId is null || _defaultSupplierId == Guid.Empty)).ToList();
+        if (rowsMissingSupplier.Count > 0)
+        {
+            Notify(NotificationSeverity.Warning, "Supplier required", "Some rows do not have supplier history. Select a fallback supplier before bulk creating POs.");
+            return;
+        }
+
+        var confirmed = await DialogServiceConfirm($"Create draft purchase orders for {rows.Count} visible purchase suggestion(s)? They will be grouped by store and supplier.", "Create draft POs");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _busy = true;
+        var created = 0;
+        var failed = 0;
+        foreach (var group in rows.GroupBy(r => new { r.StoreId, SupplierId = r.SuggestedSupplierId ?? _defaultSupplierId!.Value }))
+        {
+            var result = await ReorderService.CreatePurchaseDraftAsync(new CreateReorderPurchaseDraftDto
+            {
+                StoreId = group.Key.StoreId,
+                SupplierId = group.Key.SupplierId,
+                Notes = "Bulk draft purchase created from Smart Reorder suggestions.",
+                Lines = group.Select(r => new CreateReorderPurchaseDraftLineDto
+                {
+                    ProductId = r.ProductId,
+                    ProductVariantId = r.ProductVariantId,
+                    Quantity = r.SuggestedPurchaseQuantity,
+                    UnitCost = r.LastUnitCost
+                }).ToList()
+            });
+
+            if (result.Succeeded)
+            {
+                created++;
+            }
+            else
+            {
+                failed++;
+            }
+        }
+
+        _busy = false;
+        Notify(failed == 0 ? NotificationSeverity.Success : NotificationSeverity.Warning,
+            "Bulk reorder complete",
+            $"Created {created} draft purchase order(s). Failed groups: {failed}.");
+        await LoadAsync();
+    }
+
+
+    private void OpenInventory() => Nav.NavigateTo("/inventory");
+
+    private async Task<bool> DialogServiceConfirm(string message, string title)
+    {
+        var confirmed = await DialogService.Confirm(message, title);
+        return confirmed == true;
+    }
+
+    private void Notify(NotificationSeverity severity, string summary, string detail) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4500 });
+
+    private static BadgeStyle SeverityStyle(string severity) => severity switch
+    {
+        "Critical" => BadgeStyle.Danger,
+        "Warning" => BadgeStyle.Warning,
+        _ => BadgeStyle.Info
+    };
+
+    private static string Money(decimal value) => value.ToString("N2");
+    private static string Qty(decimal value) => value.ToString("0.###");
+}

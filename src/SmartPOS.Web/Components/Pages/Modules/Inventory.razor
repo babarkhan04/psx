@@ -1,0 +1,218 @@
+@page "/inventory"
+@attribute [Authorize(Policy = Permissions.Catalog.InventoryView)]
+@inject IInventoryService InventoryService
+@inject IProductService ProductService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject DialogService DialogService
+@inject NotificationService Notifications
+
+<PageTitle>Inventory · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Inventory &amp; Stock</h1>
+        <p class="page-subtitle">Ledger-based stock — every movement is recorded and auditable.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown TValue="Guid?" @bind-Value="_storeFilter" Data="@_storeOptions"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        TextProperty="Name" ValueProperty="Id" Change="@OnStoreFilterChanged"
+                        Style="min-width:220px" Placeholder="All stores" />
+        <RadzenButton Icon="tune" Text="Stock adjustment" Click="@OpenAdjustment"
+                      Disabled="@(!_canManage)" />
+    </div>
+</div>
+
+<RadzenCard class="content-card">
+    <RadzenTabs RenderMode="TabRenderMode.Client" Change="@OnTabChange">
+        <Tabs>
+            <RadzenTabsItem Text="On hand" Icon="inventory">
+                <RadzenStack Gap="0.75rem" Style="margin-top:0.75rem">
+                    <RadzenCheckBox Value="_lowStockOnly" TValue="bool" Name="lowStock"
+                                    ValueChanged="@(async (bool v) => { _lowStockOnly = v; await LoadStockAsync(); })" />
+                    <RadzenLabel Text="Show low stock only" Component="lowStock" Style="display:inline;margin-left:0.35rem" />
+
+                    <RadzenDataGrid Data="@_stock" TItem="StockListItemDto" AllowSorting="true" AllowPaging="true"
+                                    PageSize="12" EmptyText="No stock records yet." IsLoading="@_loadingStock">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="StockListItemDto" Property="ProductSku" Title="SKU" Width="120px" />
+                            <RadzenDataGridColumn TItem="StockListItemDto" Property="ProductName" Title="Product" />
+                            <RadzenDataGridColumn TItem="StockListItemDto" Property="VariantName" Title="Variant" />
+                            <RadzenDataGridColumn TItem="StockListItemDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="StockListItemDto" Property="QuantityOnHand" Title="On hand" Width="110px" TextAlign="TextAlign.End">
+                                <Template Context="s">
+                                    <span class="@(s.IsLowStock ? "text-warn" : "")">@s.QuantityOnHand.ToString("0.###")</span>
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="StockListItemDto" Property="ReorderLevel" Title="Reorder" Width="100px" TextAlign="TextAlign.End" />
+                            <RadzenDataGridColumn TItem="StockListItemDto" Title="Status" Width="110px" TextAlign="TextAlign.Center">
+                                <Template Context="s">
+                                    @if (s.IsLowStock)
+                                    {
+                                        <span class="status-pill off">Low</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="status-pill on">OK</span>
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenStack>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Movements" Icon="history">
+                <RadzenDataGrid Data="@_ledger" TItem="StockLedgerDto" AllowSorting="true" AllowPaging="true"
+                                PageSize="15" EmptyText="No movements yet." IsLoading="@_loadingLedger"
+                                Style="margin-top:0.75rem">
+                    <Columns>
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="CreatedOn" Title="When" Width="170px">
+                            <Template Context="l">@l.CreatedOn.ToLocalTime().ToString("g")</Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="MovementType" Title="Type" Width="120px" />
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="ProductName" Title="Product" />
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="StoreName" Title="Store" />
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="QuantityChange" Title="Change" Width="100px" TextAlign="TextAlign.End">
+                            <Template Context="l">
+                                <span class="@(l.QuantityChange < 0 ? "text-warn" : "text-ok")">@l.QuantityChange.ToString("+0.###;-0.###;0")</span>
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="QuantityAfter" Title="After" Width="100px" TextAlign="TextAlign.End" />
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="Reference" Title="Ref" Width="100px" />
+                        <RadzenDataGridColumn TItem="StockLedgerDto" Property="Notes" Title="Notes" />
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+</RadzenCard>
+
+@code {
+    private IReadOnlyList<StockListItemDto> _stock = [];
+    private IReadOnlyList<StockLedgerDto> _ledger = [];
+    private IReadOnlyList<StoreDto> _stores = [];
+    private List<LookupDto> _storeOptions = [];
+    private IReadOnlyList<ProductListItemDto> _products = [];
+
+    private Guid? _storeFilter;
+    private bool _lowStockOnly;
+    private bool _loadingStock = true;
+    private bool _loadingLedger;
+    private bool _ledgerLoaded;
+    private int _activeTab;
+    private bool _canManage;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _canManage = state.User.HasClaim(Permissions.ClaimType, Permissions.Catalog.InventoryManage);
+        }
+
+        _stores = await StoreService.GetAllAsync(includeInactive: false);
+        _storeOptions = [new LookupDto { Id = Guid.Empty, Name = "All stores" }, .._stores.Select(s => new LookupDto { Id = s.Id, Name = $"{s.Code} · {s.Name}" })];
+        if (StoreContext.StoreId is { } selectedStore && _stores.Any(s => s.Id == selectedStore))
+        {
+            _storeFilter = selectedStore;
+        }
+
+        await LoadStockAsync();
+    }
+
+    private async Task LoadStockAsync()
+    {
+        _loadingStock = true;
+        var filter = _storeFilter is null || _storeFilter == Guid.Empty ? (Guid?)null : _storeFilter;
+        _stock = await InventoryService.GetStockAsync(filter, _lowStockOnly);
+        _loadingStock = false;
+    }
+
+    private async Task LoadLedgerAsync(bool force = false)
+    {
+        if (_ledgerLoaded && !force)
+        {
+            return;
+        }
+
+        _loadingLedger = true;
+        try
+        {
+            var filter = _storeFilter is null || _storeFilter == Guid.Empty ? (Guid?)null : _storeFilter;
+            _ledger = await InventoryService.GetLedgerAsync(filter);
+            _ledgerLoaded = true;
+        }
+        finally
+        {
+            _loadingLedger = false;
+        }
+    }
+
+    private async Task OnStoreFilterChanged(object? _)
+    {
+        _ledgerLoaded = false;
+
+        if (_activeTab == 1)
+        {
+            await LoadLedgerAsync();
+            return;
+        }
+
+        await LoadStockAsync();
+    }
+
+    private async Task OnTabChange(int index)
+    {
+        _activeTab = index;
+        if (index == 1)
+        {
+            await LoadLedgerAsync();
+        }
+    }
+
+    private async Task OpenAdjustment()
+    {
+        if (_products.Count == 0)
+        {
+            _products = await ProductService.GetAllAsync();
+        }
+
+        var model = new StockAdjustmentDto
+        {
+            StoreId = _storeFilter is { } id && id != Guid.Empty ? id : (_stores.FirstOrDefault()?.Id ?? Guid.Empty),
+            MovementType = "Adjustment"
+        };
+
+        var saved = await DialogService.OpenAsync<StockAdjustmentDialog>(
+            "Stock adjustment",
+            new Dictionary<string, object>
+            {
+                [nameof(StockAdjustmentDialog.Model)] = model,
+                [nameof(StockAdjustmentDialog.Stores)] = _stores.Select(s => new LookupDto { Id = s.Id, Name = $"{s.Code} · {s.Name}" }).ToList(),
+                [nameof(StockAdjustmentDialog.Products)] = _products
+            },
+            new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = false });
+
+        if (saved is true)
+        {
+            _ledgerLoaded = false;
+            await LoadStockAsync();
+            if (_activeTab == 1)
+            {
+                await LoadLedgerAsync();
+            }
+
+            Notifications.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Success,
+                Summary = "Posted",
+                Detail = "Stock adjustment recorded in the ledger.",
+                Duration = 4000
+            });
+        }
+    }
+}

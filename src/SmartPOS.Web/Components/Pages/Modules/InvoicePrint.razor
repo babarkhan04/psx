@@ -1,0 +1,59 @@
+@page "/invoice/{SaleId:guid}"
+@attribute [Authorize(Policy = Permissions.Sales.View)]
+@inject IPosService PosService
+@inject IJSRuntime Js
+@inject NavigationManager Navigation
+
+<PageTitle>Invoice · SmartPOS</PageTitle>
+
+@if (_loading)
+{
+    <RadzenCard class="content-card"><RadzenProgressBar Mode="ProgressBarMode.Indeterminate" /></RadzenCard>
+}
+else if (_receipt is null)
+{
+    <RadzenCard class="content-card">
+        <h2>Invoice not found</h2>
+        <p>The requested invoice could not be loaded.</p>
+        <RadzenButton Text="Back to sales" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Navigation.NavigateTo("/sales"))" />
+    </RadzenCard>
+}
+else
+{
+    <div class="page-header no-print">
+        <div>
+            <h1 class="page-title">A4 Invoice</h1>
+            <p class="page-subtitle">Print-ready invoice for wholesale, credit, or customer copy.</p>
+        </div>
+        <div class="toolbar-actions">
+            <RadzenButton Text="Print A4" Icon="print" ButtonStyle="ButtonStyle.Primary" Click="@(() => PrintAsync())" />
+            <RadzenButton Text="Back to Sales" Icon="arrow_back" ButtonStyle="ButtonStyle.Light" Click="@(() => Navigation.NavigateTo("/sales"))" />
+        </div>
+    </div>
+
+    @if (_receipt is not null)
+    {
+        <A4InvoiceDialog Receipt="@_receipt" />
+    }
+}
+
+@code {
+    [Parameter] public Guid SaleId { get; set; }
+    private PosReceiptDto? _receipt;
+    private bool _loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _receipt = await PosService.GetReceiptAsync(SaleId);
+        _loading = false;
+    }
+
+    private async Task PrintAsync()
+    {
+        if (_receipt is not null)
+        {
+            await Js.InvokeVoidAsync("smartPosInvoicePrint.printElement", "a4InvoicePrintArea", $"Invoice {_receipt.SaleNumber}");
+        }
+    }
+}

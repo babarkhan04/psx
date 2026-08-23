@@ -1,0 +1,286 @@
+@page "/products"
+@attribute [Authorize(Policy = Permissions.Catalog.ProductsView)]
+@inject IProductService ProductService
+@inject ICategoryService CategoryService
+@inject IBrandService BrandService
+@inject IUnitService UnitService
+@inject ITaxCategoryService TaxCategoryService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject DialogService DialogService
+@inject NotificationService Notifications
+@inject IProductImportExportService ImportExportService
+
+<PageTitle>Products · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Products</h1>
+        <p class="page-subtitle">Your product catalog — SKUs, barcodes, pricing, and tax.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenTextBox @bind-Value="_search" Placeholder="Search name, SKU, barcode…" Style="min-width:240px"
+                       @oninput="@(args => _search = args.Value?.ToString())" Change="@(_ => LoadAsync())" />
+        <RadzenButton Icon="search" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" />
+        <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.35rem" Style="white-space:nowrap">
+            <RadzenCheckBox TValue="bool"
+                            Value="@_showAssignedOnly"
+                            Change="@OnAssignedOnlyChanged"
+                            Name="ShowAssignedOnly" />            <RadzenLabel Text="Current store only" Component="ShowAssignedOnly" />
+        </RadzenStack>
+        @if (_canManage)
+        {
+            <RadzenButton Icon="storefront" Text="Assign visible" ButtonStyle="ButtonStyle.Light"
+                          Click="@(() => AssignVisibleAsync(true))" Disabled="@(!CanBulkAssign)" />
+            <RadzenButton Icon="visibility_off" Text="Hide visible" ButtonStyle="ButtonStyle.Light"
+                          Click="@(() => AssignVisibleAsync(false))" Disabled="@(!CanBulkAssign)" />
+            <a href="api/products/export" class="rz-button rz-button-light" style="text-decoration:none;display:inline-flex;align-items:center;gap:0.35rem;padding:0.5rem 0.85rem;border-radius:8px">
+                <RadzenIcon Icon="download" /> Export
+            </a>
+            <InputFile OnChange="OnImportFile" accept=".xlsx" class="file-input" />
+        }
+        <RadzenButton Icon="add" Text="New product" Click="@(() => OpenEditor(null))" Disabled="@(!_canManage)" />
+    </div>
+</div>
+
+<RadzenCard class="content-card grid-card">
+    <RadzenDataGrid Data="@_products" TItem="ProductListItemDto" AllowSorting="true" AllowPaging="true"
+                    PageSize="12" EmptyText="No products found." IsLoading="@_loading">
+        <Columns>
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="Sku" Title="SKU" Width="120px" />
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="Name" Title="Product" />
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="CategoryName" Title="Category" />
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="BrandName" Title="Brand" />
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="VariantCount" Title="Variants" Width="90px" TextAlign="TextAlign.Center" />
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="CostPrice" Title="Cost" Width="100px" TextAlign="TextAlign.End">
+                <Template Context="p">@p.CostPrice.ToString("0.00")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="SellPrice" Title="Sell" Width="100px" TextAlign="TextAlign.End">
+                <Template Context="p">@p.SellPrice.ToString("0.00")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="TaxRate" Title="Tax" Width="80px" TextAlign="TextAlign.End">
+                <Template Context="p">@(p.TaxRate.HasValue ? p.TaxRate.Value.ToString("0.##") + "%" : "—")</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ProductListItemDto" Property="IsActive" Title="Status" Width="110px" TextAlign="TextAlign.Center">
+                <Template Context="p">
+                    <span class="status-pill @(p.IsActive ? "on" : "off")">@(p.IsActive ? "Active" : "Inactive")</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ProductListItemDto" Title="Current store" Width="130px" TextAlign="TextAlign.Center">
+                <Template Context="p">
+                    <span class="status-pill @(p.IsAssignedToSelectedStore ? "on" : "off")">@(p.IsAssignedToSelectedStore ? "Assigned" : "Hidden")</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="ProductListItemDto" Title="" Width="160px" Sortable="false" TextAlign="TextAlign.End">
+                <Template Context="p">
+                    <RadzenButton Icon="edit" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => OpenEditor(p))" Disabled="@(!_canManage)" />
+                    <RadzenButton Icon="@(p.IsActive ? "visibility_off" : "visibility")" ButtonStyle="ButtonStyle.Light"
+                                  Size="ButtonSize.Small" Click="@(() => ToggleActiveAsync(p))" Disabled="@(!_canManage)" Style="margin-left:0.35rem" />
+                    <RadzenButton Icon="delete" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => DeleteAsync(p))" Disabled="@(!_canManage)" Style="margin-left:0.35rem" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private IReadOnlyList<ProductListItemDto> _products = [];
+    private IReadOnlyList<LookupDto> _categories = [];
+    private IReadOnlyList<LookupDto> _brands = [];
+    private IReadOnlyList<LookupDto> _units = [];
+    private IReadOnlyList<LookupDto> _taxes = [];
+    private IReadOnlyList<StoreDto> _stores = [];
+
+    private string? _search;
+    private bool _loading = true;
+    private bool _canManage;
+    private bool _showAssignedOnly;
+
+    private bool CanBulkAssign => _canManage && StoreContext.StoreId is not null && _products.Count > 0;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _canManage = state.User.HasClaim(Permissions.ClaimType, Permissions.Catalog.ProductsManage);
+        }
+
+        _categories = await CategoryService.GetLookupAsync();
+        _brands = await BrandService.GetLookupAsync();
+        _units = await UnitService.GetLookupAsync();
+        _taxes = await TaxCategoryService.GetLookupAsync();
+        _stores = await StoreService.GetAllAsync(includeInactive: false);
+        await LoadAsync();
+    }
+    private async Task OnAssignedOnlyChanged(bool value)
+    {
+        _showAssignedOnly = value;
+        await LoadAsync();
+    }
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _products = await ProductService.GetAllAsync(_search, StoreContext.StoreId, _showAssignedOnly);
+        _loading = false;
+    }
+
+    private async Task OpenEditor(ProductListItemDto? item)
+    {
+        if (!_canManage)
+        {
+            return;
+        }
+
+        ProductDto model;
+        if (item is null)
+        {
+            model = new ProductDto { IsActive = true };
+        }
+        else
+        {
+            model = await ProductService.GetAsync(item.Id) ?? new ProductDto { IsActive = true };
+        }
+
+        // Merge stored overrides with the full active-store list for editing.
+        var existing = model.StorePrices.ToDictionary(sp => sp.StoreId, sp => sp.Price);
+        model.StorePrices = _stores.Select(s => new ProductStorePriceDto
+        {
+            StoreId = s.Id,
+            StoreName = $"{s.Code} · {s.Name}",
+            Price = existing.TryGetValue(s.Id, out var price) ? price : null
+        }).ToList();
+
+        // Store visibility controls which stores can see/sell this product in POS.
+        var existingAssignments = model.StoreAssignments.ToDictionary(a => a.StoreId, a => a.IsVisibleOnPos);
+        model.StoreAssignments = _stores.Select(s => new ProductStoreAssignmentDto
+        {
+            StoreId = s.Id,
+            StoreName = $"{s.Code} · {s.Name}",
+            IsVisibleOnPos = existingAssignments.TryGetValue(s.Id, out var visible)
+                ? visible
+                : item is null && StoreContext.StoreId == s.Id
+        }).ToList();
+
+        var saved = await DialogService.OpenAsync<ProductDialog>(
+            item is null ? "New product" : $"Edit · {item.Name}",
+            new Dictionary<string, object>
+            {
+                [nameof(ProductDialog.Model)] = model,
+                [nameof(ProductDialog.Categories)] = _categories,
+                [nameof(ProductDialog.Brands)] = _brands,
+                [nameof(ProductDialog.Units)] = _units,
+                [nameof(ProductDialog.Taxes)] = _taxes
+            },
+            new DialogOptions { Width = "820px", CloseDialogOnOverlayClick = false });
+
+        if (saved is true)
+        {
+            await LoadAsync();
+            Notify("Saved", "Product saved successfully.", NotificationSeverity.Success);
+        }
+    }
+
+    private async Task ToggleActiveAsync(ProductListItemDto p)
+    {
+        var result = await ProductService.SetActiveAsync(p.Id, !p.IsActive);
+        if (result.Succeeded)
+        {
+            await LoadAsync();
+        }
+        else
+        {
+            Notify("Action failed", result.Error ?? "Unknown error", NotificationSeverity.Error);
+        }
+    }
+
+    private async Task DeleteAsync(ProductListItemDto p)
+    {
+        var confirmed = await DialogService.Confirm(
+            $"Delete product '{p.Name}'?", "Delete product",
+            new ConfirmOptions { OkButtonText = "Delete", CancelButtonText = "Cancel" });
+
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        var result = await ProductService.DeleteAsync(p.Id);
+        if (result.Succeeded)
+        {
+            await LoadAsync();
+            Notify("Deleted", "Product removed.", NotificationSeverity.Success);
+        }
+        else
+        {
+            Notify("Could not delete", result.Error ?? "Unknown error", NotificationSeverity.Error);
+        }
+    }
+
+    private async Task AssignVisibleAsync(bool visible)
+    {
+        if (StoreContext.StoreId is not { } storeId || _products.Count == 0)
+        {
+            Notify("Store assignment", "Select a store and load products first.", NotificationSeverity.Warning);
+            return;
+        }
+
+        var action = visible ? "assign" : "hide";
+        var confirmed = await DialogService.Confirm(
+            $"This will {action} {_products.Count} visible product(s) for the selected store. Continue?",
+            visible ? "Assign products to store" : "Hide products from store",
+            new ConfirmOptions { OkButtonText = visible ? "Assign" : "Hide", CancelButtonText = "Cancel" });
+
+        if (confirmed != true)
+        {
+            return;
+        }
+
+        var result = await ProductService.AssignProductsToStoreAsync(_products.Select(p => p.Id).ToList(), storeId, visible);
+        if (result.Succeeded)
+        {
+            Notify("Store catalog updated", visible ? "Visible products were assigned to the current store." : "Visible products were hidden from the current store.", NotificationSeverity.Success);
+            await LoadAsync();
+        }
+        else
+        {
+            Notify("Store assignment failed", result.Error ?? "Unknown error", NotificationSeverity.Error);
+        }
+    }
+
+    private void Notify(string summary, string detail, NotificationSeverity severity) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4000 });
+
+    private async Task OnImportFile(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        await using var stream = file.OpenReadStream(10 * 1024 * 1024);
+        var result = await ImportExportService.ImportAsync(stream, StoreContext.StoreId);
+        if (result.Succeeded && result.Data is not null)
+        {
+            var d = result.Data;
+            var detail = $"Created {d.Created}, updated {d.Updated}, skipped {d.Skipped}.";
+            if (d.Errors.Count > 0)
+            {
+                detail += " " + string.Join(" ", d.Errors.Take(3));
+            }
+
+            Notify("Import complete", detail,
+                d.Errors.Count > 0 ? NotificationSeverity.Warning : NotificationSeverity.Success);
+            await LoadAsync();
+        }
+        else
+        {
+            Notify("Import failed", result.Error ?? "Unknown error", NotificationSeverity.Error);
+        }
+    }
+}

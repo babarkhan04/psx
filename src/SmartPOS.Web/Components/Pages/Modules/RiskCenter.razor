@@ -1,0 +1,228 @@
+@page "/risk"
+@attribute [Authorize(Policy = Permissions.Insights.RiskView)]
+@inject IRiskService RiskService
+@inject IStoreService StoreService
+@inject IStoreContext StoreContext
+@inject NavigationManager Nav
+
+<PageTitle>Risk Center · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Cashier Risk Center</h1>
+        <p class="page-subtitle">Detect unusual discounts, voids, returns, cash variance, price overrides, and approval-heavy activity.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenDropDown @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Text" ValueProperty="Value"
+                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
+                        Change="@(_ => LoadAsync())" Style="min-width:220px" />
+        <RadzenDropDown @bind-Value="_riskLevel" Data="@_riskLevels" Change="@(_ => LoadAsync())" Style="width:145px" />
+        <RadzenDatePicker TValue="DateTime?" @bind-Value="_from" DateFormat="dd MMM yyyy" Change="@(_ => LoadAsync())" Style="width:155px" ShowTime="false" />
+        <RadzenDatePicker TValue="DateTime?" @bind-Value="_to" DateFormat="dd MMM yyyy" Change="@(_ => LoadAsync())" Style="width:155px" ShowTime="false" />
+        <RadzenButton Icon="refresh" Text="Refresh" ButtonStyle="ButtonStyle.Light" Click="@(() => LoadAsync())" />
+    </div>
+</div>
+
+@if (_loading)
+{
+    <div class="customer-ledger-loading"><RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" /></div>
+}
+else if (_model is not null)
+{
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Cashiers reviewed</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="groups" /></span></div>
+            <div class="kpi-value">@_model.Summary.CashierCount</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">High risk</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="report" /></span></div>
+            <div class="kpi-value">@_model.Summary.HighRiskCount</div>
+            <div class="page-subtitle">Need manager review</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Discounts / Voids</span><span class="kpi-chip chip-sales"><RadzenIcon Icon="percent" /></span></div>
+            <div class="kpi-value">@Money(_model.Summary.TotalDiscounts + _model.Summary.TotalVoids)</div>
+            <div class="page-subtitle">@Money(_model.Summary.TotalDiscounts) discounts · @Money(_model.Summary.TotalVoids) voids</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-top"><span class="kpi-label">Cash variance</span><span class="kpi-chip chip-cash"><RadzenIcon Icon="account_balance_wallet" /></span></div>
+            <div class="kpi-value">@Money(_model.Summary.TotalCashVariance)</div>
+            <div class="page-subtitle">@_model.Summary.ApprovalCount approval request(s)</div>
+        </div>
+    </div>
+
+    <RadzenTabs>
+        <Tabs>
+            <RadzenTabsItem Text="Cashier scorecard">
+                <RadzenCard class="content-card grid-card">
+                    <RadzenDataGrid Data="@_model.Cashiers" TItem="CashierRiskRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" Density="Density.Compact">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="RiskLevel" Title="Risk" Width="105px">
+                                <Template Context="row">
+                                    <RadzenBadge BadgeStyle="@RiskBadge(row.RiskLevel)" Text="@row.RiskLevel" />
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="RiskScore" Title="Score" Width="90px" TextAlign="TextAlign.End">
+                                <Template Context="row"><strong>@row.RiskScore</strong></Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="CashierName" Title="Cashier" Width="220px">
+                                <Template Context="row">
+                                    <strong>@row.CashierName</strong>
+                                    <div class="page-subtitle">@row.StoreNames</div>
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="TransactionCount" Title="Sales" Width="85px" TextAlign="TextAlign.End" />
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="NetSales" Title="Net sales" Width="125px" TextAlign="TextAlign.End">
+                                <Template Context="row">@Money(row.NetSales)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="DiscountAmount" Title="Discount" Width="130px" TextAlign="TextAlign.End">
+                                <Template Context="row">
+                                    @Money(row.DiscountAmount)
+                                    <div class="page-subtitle">@row.DiscountRatePercent.ToString("N1")%</div>
+                                </Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="VoidCount" Title="Voids" Width="90px" TextAlign="TextAlign.End">
+                                <Template Context="row">@row.VoidCount / @Money(row.VoidAmount)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="ReturnCount" Title="Returns" Width="110px" TextAlign="TextAlign.End">
+                                <Template Context="row">@row.ReturnCount / @Money(row.ReturnAmount)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="CashVariance" Title="Cash variance" Width="130px" TextAlign="TextAlign.End">
+                                <Template Context="row">@Money(row.CashVariance)</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="ApprovalRequestCount" Title="Approvals" Width="105px" TextAlign="TextAlign.End" />
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="KeyIssues" Title="Key issues" />
+                            <RadzenDataGridColumn TItem="CashierRiskRowDto" Property="LastActivityOn" Title="Last activity" Width="155px">
+                                <Template Context="row">@(row.LastActivityOn is null ? "-" : row.LastActivityOn.Value.ToLocalTime().ToString("dd MMM HH:mm"))</Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Risk events">
+                <RadzenCard class="content-card grid-card">
+                    <RadzenDataGrid Data="@_model.Events" TItem="RiskEventDto" AllowPaging="true" PageSize="25" AllowSorting="true" AllowFiltering="true" Density="Density.Compact">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="Severity" Title="Severity" Width="105px">
+                                <Template Context="row"><RadzenBadge BadgeStyle="@EventBadge(row.Severity)" Text="@row.Severity" /></Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="EventOn" Title="Date" Width="155px">
+                                <Template Context="row">@row.EventOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="EventType" Title="Type" Width="145px" />
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="Reference" Title="Reference" Width="150px" />
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="UserName" Title="User" Width="190px" />
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="StoreName" Title="Store" Width="200px" />
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="Amount" Title="Amount" Width="120px" TextAlign="TextAlign.End">
+                                <Template Context="row">@(row.Amount is null ? "-" : Money(row.Amount.Value))</Template>
+                            </RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="RiskEventDto" Property="Details" Title="Details" />
+                            <RadzenDataGridColumn TItem="RiskEventDto" Title="Action" Width="110px" Filterable="false" Sortable="false">
+                                <Template Context="row">
+                                    @if (!string.IsNullOrWhiteSpace(row.ActionUrl))
+                                    {
+                                        <RadzenButton Icon="open_in_new" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => Nav.NavigateTo(row.ActionUrl!))" />
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                </RadzenCard>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Breakdown">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem">
+                    <RadzenCard class="content-card grid-card">
+                        <h3 style="margin-top:0">Risk level breakdown</h3>
+                        <RadzenDataGrid Data="@_model.RiskBreakdown" TItem="RiskBreakdownDto" AllowPaging="false" Density="Density.Compact">
+                            <Columns>
+                                <RadzenDataGridColumn TItem="RiskBreakdownDto" Property="Name" Title="Risk level" />
+                                <RadzenDataGridColumn TItem="RiskBreakdownDto" Property="Count" Title="Cashiers" TextAlign="TextAlign.End" />
+                                <RadzenDataGridColumn TItem="RiskBreakdownDto" Property="Amount" Title="Net sales" TextAlign="TextAlign.End">
+                                    <Template Context="row">@Money(row.Amount)</Template>
+                                </RadzenDataGridColumn>
+                            </Columns>
+                        </RadzenDataGrid>
+                    </RadzenCard>
+
+                    <RadzenCard class="content-card grid-card">
+                        <h3 style="margin-top:0">Event type breakdown</h3>
+                        <RadzenDataGrid Data="@_model.EventBreakdown" TItem="RiskBreakdownDto" AllowPaging="false" Density="Density.Compact">
+                            <Columns>
+                                <RadzenDataGridColumn TItem="RiskBreakdownDto" Property="Name" Title="Event" />
+                                <RadzenDataGridColumn TItem="RiskBreakdownDto" Property="Count" Title="Count" TextAlign="TextAlign.End" />
+                                <RadzenDataGridColumn TItem="RiskBreakdownDto" Property="Amount" Title="Amount" TextAlign="TextAlign.End">
+                                    <Template Context="row">@Money(row.Amount)</Template>
+                                </RadzenDataGridColumn>
+                            </Columns>
+                        </RadzenDataGrid>
+                    </RadzenCard>
+                </div>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+}
+
+@code {
+    private RiskDashboardDto? _model;
+    private bool _loading;
+    private Guid? _storeId;
+    private DateTime? _from = DateTime.Today.AddDays(-30);
+    private DateTime? _to = DateTime.Today.AddDays(1);
+    private string _riskLevel = "All";
+    private readonly string[] _riskLevels = ["All", "High", "Medium", "Low"];
+    private List<StoreOption> _storeOptions = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var stores = await StoreService.GetAllAsync(false);
+        _storeOptions = [new StoreOption(null, "All stores")];
+        _storeOptions.AddRange(stores.Select(s => new StoreOption(s.Id, $"{s.Code} · {s.Name}")));
+        if (StoreContext.StoreId is { } selectedStore && stores.Any(s => s.Id == selectedStore))
+        {
+            _storeId = selectedStore;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _model = await RiskService.GetRiskDashboardAsync(new RiskQueryDto
+            {
+                StoreId = _storeId,
+                FromUtc = _from?.Date,
+                ToUtc = _to?.Date.AddDays(1),
+                RiskLevel = _riskLevel
+            });
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string Money(decimal value) => $"Rs {value:N0}";
+
+    private static BadgeStyle RiskBadge(string level) => level switch
+    {
+        "High" => BadgeStyle.Danger,
+        "Medium" => BadgeStyle.Warning,
+        "Low" => BadgeStyle.Success,
+        _ => BadgeStyle.Light
+    };
+
+    private static BadgeStyle EventBadge(string severity) => severity switch
+    {
+        "High" => BadgeStyle.Danger,
+        "Medium" => BadgeStyle.Warning,
+        "Info" => BadgeStyle.Info,
+        _ => BadgeStyle.Light
+    };
+
+    private sealed record StoreOption(Guid? Value, string Text);
+}

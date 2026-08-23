@@ -1,0 +1,26 @@
+@inject DialogService DialogService
+
+<RadzenStack Gap="0.75rem">
+    @if (Details.Count == 0)
+    {
+        <p style="margin:0;color:var(--sp-text-muted)">No details available.</p>
+    }
+    else
+    {
+        @foreach (var item in Details)
+        {
+            <div style="display:flex;justify-content:space-between;gap:1rem;padding:0.65rem 0;border-bottom:1px solid rgba(148,163,184,.25)">
+                <span style="color:var(--sp-text-muted)">@item.Key</span>
+                <strong style="text-align:right">@item.Value</strong>
+            </div>
+        }
+    }
+
+    <div style="display:flex;justify-content:flex-end;margin-top:0.75rem">
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close())" />
+    </div>
+</RadzenStack>
+
+@code {
+    [Parameter] public Dictionary<string, string> Details { get; set; } = [];
+}

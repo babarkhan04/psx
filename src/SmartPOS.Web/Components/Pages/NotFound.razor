@@ -1,0 +1,23 @@
+@page "/not-found"
+@layout BlankLayout
+
+<PageTitle>Not Found · SmartPOS</PageTitle>
+
+<div class="status-page">
+    <div class="status-card">
+        <div class="status-emoji"><RadzenIcon Icon="travel_explore" /></div>
+        <h1>404</h1>
+        <h2>Page not found</h2>
+        <p>The page you’re looking for doesn’t exist or may have moved.</p>
+        <div class="status-actions">
+            <RadzenButton Text="Go to Dashboard" Icon="dashboard" ButtonStyle="ButtonStyle.Primary"
+                          Click="@(() => Navigation.NavigateTo("/dashboard"))" />
+            <RadzenButton Text="Sign in" Icon="login" ButtonStyle="ButtonStyle.Light"
+                          Click="@(() => Navigation.NavigateTo("/login"))" />
+        </div>
+    </div>
+</div>
+
+@code {
+    [Inject] private NavigationManager Navigation { get; set; } = default!;
+}

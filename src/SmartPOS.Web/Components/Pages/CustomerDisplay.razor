@@ -1,0 +1,117 @@
+@page "/customer-display/{RegisterId:guid}"
+@layout BlankLayout
+@implements IDisposable
+@inject SmartPOS.Web.Services.CustomerDisplayStateService DisplayState
+
+<PageTitle>Customer Display · SmartPOS</PageTitle>
+
+<div class="customer-display-shell">
+    <header class="customer-display-header">
+        <div>
+            <h1>@NullIfWhiteSpace(_state.StoreName, "SmartPOS")</h1>
+            <p>@NullIfWhiteSpace(_state.RegisterName, "Customer display")</p>
+        </div>
+        <div class="customer-display-status @StatusClass">
+            @_state.Status
+        </div>
+    </header>
+
+    <main class="customer-display-main">
+        <section class="customer-display-cart">
+            <div class="customer-display-customer">
+                <span>Customer</span>
+                <strong>@_state.CustomerName</strong>
+            </div>
+
+            @if (_state.Lines.Count == 0)
+            {
+                <div class="customer-display-empty">
+                    <RadzenIcon Icon="shopping_cart" />
+                    <h2>Welcome</h2>
+                    <p>Your items will appear here.</p>
+                </div>
+            }
+            else
+            {
+                <div class="customer-display-lines">
+                    @foreach (var line in _state.Lines)
+                    {
+                        <div class="customer-display-line">
+                            <div>
+                                <strong>@line.Name</strong>
+                                <span>@line.Sku · @line.Quantity.ToString("0.###") × @line.UnitPrice.ToString("C2")</span>
+                            </div>
+                            <strong>@line.LineTotal.ToString("C2")</strong>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <aside class="customer-display-total-card">
+            @if (!string.IsNullOrWhiteSpace(_state.SaleNumber))
+            {
+                <span class="customer-display-sale-number">@_state.SaleNumber</span>
+            }
+            <div><span>Items</span><strong>@_state.ItemCount</strong></div>
+            <div><span>Subtotal</span><strong>@_state.Subtotal.ToString("C2")</strong></div>
+            @if (_state.DiscountAmount > 0)
+            {
+                <div><span>Discount</span><strong>-@_state.DiscountAmount.ToString("C2")</strong></div>
+            }
+            <div><span>Tax</span><strong>@_state.TaxAmount.ToString("C2")</strong></div>
+            <div class="customer-display-grand-total">
+                <span>Total</span>
+                <strong>@_state.TotalAmount.ToString("C2")</strong>
+            </div>
+            <small>Updated @LastUpdatedText</small>
+        </aside>
+    </main>
+</div>
+
+@code {
+    [Parameter] public Guid RegisterId { get; set; }
+
+    private CustomerDisplayStateDto _state = new();
+    private System.Threading.Timer? _timer;
+
+    private string StatusClass => _state.Status.Contains("complete", StringComparison.OrdinalIgnoreCase)
+        ? "complete"
+        : _state.Lines.Count > 0 ? "active" : "ready";
+
+    private string LastUpdatedText => _state.LastUpdatedOn.ToLocalTime().ToString("h:mm:ss tt");
+
+    protected override void OnInitialized()
+    {
+        _state = DisplayState.Get(RegisterId);
+        DisplayState.StateChanged += OnDisplayStateChanged;
+        _timer = new System.Threading.Timer(_ => InvokeAsync(() =>
+        {
+            _state = DisplayState.Get(RegisterId);
+            StateHasChanged();
+        }), null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    private void OnDisplayStateChanged(Guid registerId)
+    {
+        if (registerId != RegisterId)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            _state = DisplayState.Get(RegisterId);
+            StateHasChanged();
+        });
+    }
+
+    private static string NullIfWhiteSpace(string value, string fallback) =>
+        string.IsNullOrWhiteSpace(value) ? fallback : value;
+
+    public void Dispose()
+    {
+        DisplayState.StateChanged -= OnDisplayStateChanged;
+        _timer?.Dispose();
+    }
+}

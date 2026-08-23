@@ -1,0 +1,17 @@
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    <RadzenFormField Text="Role name" Variant="Variant.Outlined" Style="width:100%">
+        <RadzenTextBox @bind-Value="_name" @oninput="@(args => _name = args.Value?.ToString() ?? string.Empty)" />
+    </RadzenFormField>
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+        <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(null))" />
+        <RadzenButton Icon="add" Text="Create" Click="@Create" Disabled="@string.IsNullOrWhiteSpace(_name)" />
+    </RadzenStack>
+</RadzenStack>
+
+@code {
+    private string _name = string.Empty;
+
+    private void Create() => DialogService.Close(_name.Trim());
+}

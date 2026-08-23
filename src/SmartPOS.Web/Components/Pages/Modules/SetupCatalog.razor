@@ -1,0 +1,238 @@
+@page "/catalog/setup"
+@attribute [Authorize(Policy = Permissions.Catalog.ProductsManage)]
+@inject ICategoryService CategoryService
+@inject IBrandService BrandService
+@inject IUnitService UnitService
+@inject ITaxCategoryService TaxCategoryService
+@inject NotificationService Notifications
+
+<PageTitle>Catalog Setup · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Catalog Setup</h1>
+        <p class="page-subtitle">Define the categories, brands, units, and tax rates your products use.</p>
+    </div>
+</div>
+
+<RadzenCard class="content-card">
+    <RadzenTabs RenderMode="TabRenderMode.Client">
+        <Tabs>
+            <RadzenTabsItem Text="Categories" Icon="category">
+                <RadzenDataGrid @ref="_categoryGrid" Data="@_categories" TItem="CategoryDto"
+                                EditMode="DataGridEditMode.Single" RowUpdate="@OnCategoryUpdate" RowCreate="@OnCategoryCreate"
+                                AllowSorting="true" EmptyText="No categories yet." IsLoading="@_loading">
+                    <HeaderTemplate>
+                        <RadzenButton Icon="add" Text="Add category" Size="ButtonSize.Small"
+                                      Click="@AddCategory" Disabled="@_busy" />
+                    </HeaderTemplate>
+                    <Columns>
+                        <RadzenDataGridColumn TItem="CategoryDto" Property="Name" Title="Name">
+                            <EditTemplate Context="row"><RadzenTextBox @bind-Value="row.Name" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="CategoryDto" Property="Description" Title="Description">
+                            <EditTemplate Context="row"><RadzenTextBox @bind-Value="row.Description" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="CategoryDto" Property="ProductCount" Title="Products" Width="100px" TextAlign="TextAlign.Center" />
+                        <RadzenDataGridColumn TItem="CategoryDto" Property="IsActive" Title="Active" Width="90px" TextAlign="TextAlign.Center">
+                            <Template Context="row"><RadzenCheckBox Value="row.IsActive" Disabled="true" /></Template>
+                            <EditTemplate Context="row"><RadzenCheckBox @bind-Value="row.IsActive" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="CategoryDto" Width="150px" Sortable="false" TextAlign="TextAlign.End">
+                            <Template Context="row">
+                                @if (_categoryGrid is not null && !_categoryGrid.IsRowInEditMode(row))
+                                {
+                                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => _categoryGrid!.EditRow(row))" />
+                                    <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => DeleteCategory(row))" Style="margin-left:0.35rem" />
+                                }
+                                else
+                                {
+                                    <RadzenButton Icon="check" Size="ButtonSize.Small" Click="@(() => _categoryGrid!.UpdateRow(row))" />
+                                    <RadzenButton Icon="close" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => CancelCategory(row))" Style="margin-left:0.35rem" />
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Brands" Icon="sell">
+                <RadzenDataGrid @ref="_brandGrid" Data="@_brands" TItem="BrandDto"
+                                EditMode="DataGridEditMode.Single" RowUpdate="@OnBrandUpdate" RowCreate="@OnBrandCreate"
+                                AllowSorting="true" EmptyText="No brands yet." IsLoading="@_loading">
+                    <HeaderTemplate>
+                        <RadzenButton Icon="add" Text="Add brand" Size="ButtonSize.Small" Click="@AddBrand" Disabled="@_busy" />
+                    </HeaderTemplate>
+                    <Columns>
+                        <RadzenDataGridColumn TItem="BrandDto" Property="Name" Title="Name">
+                            <EditTemplate Context="row"><RadzenTextBox @bind-Value="row.Name" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="BrandDto" Property="Description" Title="Description">
+                            <EditTemplate Context="row"><RadzenTextBox @bind-Value="row.Description" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="BrandDto" Property="ProductCount" Title="Products" Width="100px" TextAlign="TextAlign.Center" />
+                        <RadzenDataGridColumn TItem="BrandDto" Property="IsActive" Title="Active" Width="90px" TextAlign="TextAlign.Center">
+                            <Template Context="row"><RadzenCheckBox Value="row.IsActive" Disabled="true" /></Template>
+                            <EditTemplate Context="row"><RadzenCheckBox @bind-Value="row.IsActive" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="BrandDto" Width="150px" Sortable="false" TextAlign="TextAlign.End">
+                            <Template Context="row">
+                                @if (_brandGrid is not null && !_brandGrid.IsRowInEditMode(row))
+                                {
+                                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => _brandGrid!.EditRow(row))" />
+                                    <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => DeleteBrand(row))" Style="margin-left:0.35rem" />
+                                }
+                                else
+                                {
+                                    <RadzenButton Icon="check" Size="ButtonSize.Small" Click="@(() => _brandGrid!.UpdateRow(row))" />
+                                    <RadzenButton Icon="close" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => CancelBrand(row))" Style="margin-left:0.35rem" />
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Units" Icon="straighten">
+                <RadzenDataGrid @ref="_unitGrid" Data="@_units" TItem="UnitDto"
+                                EditMode="DataGridEditMode.Single" RowUpdate="@OnUnitUpdate" RowCreate="@OnUnitCreate"
+                                AllowSorting="true" EmptyText="No units yet." IsLoading="@_loading">
+                    <HeaderTemplate>
+                        <RadzenButton Icon="add" Text="Add unit" Size="ButtonSize.Small" Click="@AddUnit" Disabled="@_busy" />
+                    </HeaderTemplate>
+                    <Columns>
+                        <RadzenDataGridColumn TItem="UnitDto" Property="Name" Title="Name">
+                            <EditTemplate Context="row"><RadzenTextBox @bind-Value="row.Name" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="UnitDto" Property="Abbreviation" Title="Abbreviation" Width="160px">
+                            <EditTemplate Context="row"><RadzenTextBox @bind-Value="row.Abbreviation" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="UnitDto" Property="ProductCount" Title="Products" Width="100px" TextAlign="TextAlign.Center" />
+                        <RadzenDataGridColumn TItem="UnitDto" Property="IsActive" Title="Active" Width="90px" TextAlign="TextAlign.Center">
+                            <Template Context="row"><RadzenCheckBox Value="row.IsActive" Disabled="true" /></Template>
+                            <EditTemplate Context="row"><RadzenCheckBox @bind-Value="row.IsActive" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="UnitDto" Width="150px" Sortable="false" TextAlign="TextAlign.End">
+                            <Template Context="row">
+                                @if (_unitGrid is not null && !_unitGrid.IsRowInEditMode(row))
+                                {
+                                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => _unitGrid!.EditRow(row))" />
+                                    <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => DeleteUnit(row))" Style="margin-left:0.35rem" />
+                                }
+                                else
+                                {
+                                    <RadzenButton Icon="check" Size="ButtonSize.Small" Click="@(() => _unitGrid!.UpdateRow(row))" />
+                                    <RadzenButton Icon="close" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => CancelUnit(row))" Style="margin-left:0.35rem" />
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenTabsItem>
+
+            <RadzenTabsItem Text="Tax Categories" Icon="percent">
+                <RadzenDataGrid @ref="_taxGrid" Data="@_taxes" TItem="TaxCategoryDto"
+                                EditMode="DataGridEditMode.Single" RowUpdate="@OnTaxUpdate" RowCreate="@OnTaxCreate"
+                                AllowSorting="true" EmptyText="No tax categories yet." IsLoading="@_loading">
+                    <HeaderTemplate>
+                        <RadzenButton Icon="add" Text="Add tax category" Size="ButtonSize.Small" Click="@AddTax" Disabled="@_busy" />
+                    </HeaderTemplate>
+                    <Columns>
+                        <RadzenDataGridColumn TItem="TaxCategoryDto" Property="Name" Title="Name">
+                            <EditTemplate Context="row"><RadzenTextBox @bind-Value="row.Name" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="TaxCategoryDto" Property="Rate" Title="Rate %" Width="160px">
+                            <Template Context="row">@row.Rate.ToString("0.##")%</Template>
+                            <EditTemplate Context="row"><RadzenNumeric @bind-Value="row.Rate" Min="0" Max="100" Style="width:100%" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="TaxCategoryDto" Property="ProductCount" Title="Products" Width="100px" TextAlign="TextAlign.Center" />
+                        <RadzenDataGridColumn TItem="TaxCategoryDto" Property="IsActive" Title="Active" Width="90px" TextAlign="TextAlign.Center">
+                            <Template Context="row"><RadzenCheckBox Value="row.IsActive" Disabled="true" /></Template>
+                            <EditTemplate Context="row"><RadzenCheckBox @bind-Value="row.IsActive" /></EditTemplate>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="TaxCategoryDto" Width="150px" Sortable="false" TextAlign="TextAlign.End">
+                            <Template Context="row">
+                                @if (_taxGrid is not null && !_taxGrid.IsRowInEditMode(row))
+                                {
+                                    <RadzenButton Icon="edit" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => _taxGrid!.EditRow(row))" />
+                                    <RadzenButton Icon="delete" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => DeleteTax(row))" Style="margin-left:0.35rem" />
+                                }
+                                else
+                                {
+                                    <RadzenButton Icon="check" Size="ButtonSize.Small" Click="@(() => _taxGrid!.UpdateRow(row))" />
+                                    <RadzenButton Icon="close" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => CancelTax(row))" Style="margin-left:0.35rem" />
+                                }
+                            </Template>
+                        </RadzenDataGridColumn>
+                    </Columns>
+                </RadzenDataGrid>
+            </RadzenTabsItem>
+        </Tabs>
+    </RadzenTabs>
+</RadzenCard>
+
+@code {
+    private RadzenDataGrid<CategoryDto>? _categoryGrid;
+    private RadzenDataGrid<BrandDto>? _brandGrid;
+    private RadzenDataGrid<UnitDto>? _unitGrid;
+    private RadzenDataGrid<TaxCategoryDto>? _taxGrid;
+
+    private List<CategoryDto> _categories = [];
+    private List<BrandDto> _brands = [];
+    private List<UnitDto> _units = [];
+    private List<TaxCategoryDto> _taxes = [];
+
+    private bool _loading = true;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await ReloadAll();
+
+    private async Task ReloadAll()
+    {
+        _loading = true;
+        _categories = (await CategoryService.GetAllAsync()).ToList();
+        _brands = (await BrandService.GetAllAsync()).ToList();
+        _units = (await UnitService.GetAllAsync()).ToList();
+        _taxes = (await TaxCategoryService.GetAllAsync()).ToList();
+        _loading = false;
+    }
+
+    private void Notify(Result result, string entity)
+    {
+        Notifications.Notify(new NotificationMessage
+        {
+            Severity = result.Succeeded ? NotificationSeverity.Success : NotificationSeverity.Error,
+            Summary = result.Succeeded ? "Saved" : "Action failed",
+            Detail = result.Succeeded ? $"{entity} saved." : result.Error,
+            Duration = 4000
+        });
+    }
+
+    // Categories
+    private async Task AddCategory() { _busy = true; var c = new CategoryDto { IsActive = true }; _categories.Insert(0, c); await _categoryGrid!.InsertRow(c); _busy = false; }
+    private async Task OnCategoryCreate(CategoryDto row) { var r = await CategoryService.CreateAsync(row); Notify(r, "Category"); await ReloadAll(); }
+    private async Task OnCategoryUpdate(CategoryDto row) { var r = await CategoryService.UpdateAsync(row); Notify(r, "Category"); await ReloadAll(); }
+    private async Task CancelCategory(CategoryDto row) { _categoryGrid!.CancelEditRow(row); if (row.Id == Guid.Empty) { _categories.Remove(row); } await ReloadAll(); }
+    private async Task DeleteCategory(CategoryDto row) { var r = await CategoryService.DeleteAsync(row.Id); Notify(r, "Category"); await ReloadAll(); }
+
+    // Brands
+    private async Task AddBrand() { _busy = true; var b = new BrandDto { IsActive = true }; _brands.Insert(0, b); await _brandGrid!.InsertRow(b); _busy = false; }
+    private async Task OnBrandCreate(BrandDto row) { var r = await BrandService.CreateAsync(row); Notify(r, "Brand"); await ReloadAll(); }
+    private async Task OnBrandUpdate(BrandDto row) { var r = await BrandService.UpdateAsync(row); Notify(r, "Brand"); await ReloadAll(); }
+    private async Task CancelBrand(BrandDto row) { _brandGrid!.CancelEditRow(row); if (row.Id == Guid.Empty) { _brands.Remove(row); } await ReloadAll(); }
+    private async Task DeleteBrand(BrandDto row) { var r = await BrandService.DeleteAsync(row.Id); Notify(r, "Brand"); await ReloadAll(); }
+
+    // Units
+    private async Task AddUnit() { _busy = true; var u = new UnitDto { IsActive = true }; _units.Insert(0, u); await _unitGrid!.InsertRow(u); _busy = false; }
+    private async Task OnUnitCreate(UnitDto row) { var r = await UnitService.CreateAsync(row); Notify(r, "Unit"); await ReloadAll(); }
+    private async Task OnUnitUpdate(UnitDto row) { var r = await UnitService.UpdateAsync(row); Notify(r, "Unit"); await ReloadAll(); }
+    private async Task CancelUnit(UnitDto row) { _unitGrid!.CancelEditRow(row); if (row.Id == Guid.Empty) { _units.Remove(row); } await ReloadAll(); }
+    private async Task DeleteUnit(UnitDto row) { var r = await UnitService.DeleteAsync(row.Id); Notify(r, "Unit"); await ReloadAll(); }
+
+    // Tax categories
+    private async Task AddTax() { _busy = true; var t = new TaxCategoryDto { IsActive = true }; _taxes.Insert(0, t); await _taxGrid!.InsertRow(t); _busy = false; }
+    private async Task OnTaxCreate(TaxCategoryDto row) { var r = await TaxCategoryService.CreateAsync(row); Notify(r, "Tax category"); await ReloadAll(); }
+    private async Task OnTaxUpdate(TaxCategoryDto row) { var r = await TaxCategoryService.UpdateAsync(row); Notify(r, "Tax category"); await ReloadAll(); }
+    private async Task CancelTax(TaxCategoryDto row) { _taxGrid!.CancelEditRow(row); if (row.Id == Guid.Empty) { _taxes.Remove(row); } await ReloadAll(); }
+    private async Task DeleteTax(TaxCategoryDto row) { var r = await TaxCategoryService.DeleteAsync(row.Id); Notify(r, "Tax category"); await ReloadAll(); }
+}

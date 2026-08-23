@@ -1,0 +1,78 @@
+@inject DialogService DialogService
+
+<div class="quick-qty-dialog">
+    <div class="quick-qty-product">
+        <strong>@ProductName</strong>
+        @if (!string.IsNullOrWhiteSpace(Sku))
+        {
+            <small>@Sku</small>
+        }
+    </div>
+
+    <label class="quick-qty-label">Quantity</label>
+    <input class="quick-qty-input"
+           type="number"
+           min="0"
+           step="0.001"
+           @bind-value="_quantity"
+           @bind-value:event="oninput"
+           @onkeydown="OnKeyDown" />
+
+    <div class="quick-qty-presets" aria-label="Quick quantity presets">
+        @foreach (var value in PresetQuantities)
+        {
+            <button type="button" class="quick-qty-preset" @onclick="() => SetQuantity(value)">@value.ToString("0.###")</button>
+        }
+    </div>
+
+    <div class="quick-qty-adjustments">
+        <button type="button" @onclick="() => AddQuantity(-5)">-5</button>
+        <button type="button" @onclick="() => AddQuantity(-1)">-1</button>
+        <button type="button" @onclick="() => AddQuantity(1)">+1</button>
+        <button type="button" @onclick="() => AddQuantity(5)">+5</button>
+    </div>
+
+    <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.SpaceBetween" AlignItems="AlignItems.Center" Style="margin-top:1rem">
+        <RadzenButton Text="Remove item" Icon="delete" ButtonStyle="ButtonStyle.Danger" Variant="Variant.Outlined" Click="@(() => DialogService.Close(0m))" />
+        <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem">
+            <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(null))" />
+            <RadzenButton Text="Apply quantity" Icon="check" ButtonStyle="ButtonStyle.Primary" Disabled="@(_quantity <= 0)" Click="@(() => DialogService.Close(Math.Round(_quantity, 3)))" />
+        </RadzenStack>
+    </RadzenStack>
+</div>
+
+@code {
+    [Parameter] public string ProductName { get; set; } = string.Empty;
+    [Parameter] public string? Sku { get; set; }
+    [Parameter] public decimal CurrentQuantity { get; set; } = 1m;
+
+    private decimal _quantity;
+    private static readonly decimal[] PresetQuantities = [1m, 2m, 3m, 5m, 10m, 12m, 24m, 50m];
+
+    protected override void OnInitialized()
+    {
+        _quantity = CurrentQuantity <= 0 ? 1m : CurrentQuantity;
+    }
+
+    private void SetQuantity(decimal quantity)
+    {
+        _quantity = quantity <= 0 ? 1m : quantity;
+    }
+
+    private void AddQuantity(decimal delta)
+    {
+        _quantity = Math.Max(0.001m, Math.Round(_quantity + delta, 3));
+    }
+
+    private void OnKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter" && _quantity > 0)
+        {
+            DialogService.Close(Math.Round(_quantity, 3));
+        }
+        else if (args.Key == "Escape")
+        {
+            DialogService.Close(null);
+        }
+    }
+}

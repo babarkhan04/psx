@@ -1,0 +1,125 @@
+/* Step 30/31: Receipt designer and print station setup */
+.sp-print-designer-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+.sp-print-context-card {
+    margin-bottom: 1rem;
+}
+
+.form-field.wide {
+    display: grid;
+    gap: 0.35rem;
+}
+
+.form-grid .full {
+    grid-column: 1 / -1;
+}
+
+.section-title-small {
+    margin: 1.1rem 0 0.65rem;
+    font-size: 0.95rem;
+}
+
+.sp-print-check-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem 0.85rem;
+}
+
+.sp-print-check-grid label {
+    display: flex;
+    gap: 0.45rem;
+    align-items: center;
+    color: #334155;
+    font-weight: 600;
+    font-size: 0.88rem;
+}
+
+.sp-print-check-grid.station {
+    margin: 1rem 0;
+}
+
+.sp-print-preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.sp-designer-receipt-preview {
+    max-width: 390px;
+    margin: 0 auto;
+}
+
+body.thermal .sp-print-receipt,
+body.thermal .sp-print-receipt-preview {
+    max-width: 80mm !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
+body.compact58 .sp-print-receipt,
+body.compact58 .sp-print-receipt-preview {
+    max-width: 58mm !important;
+    font-size: 9px !important;
+}
+
+@media (max-width: 1100px) {
+    .sp-print-designer-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Step 31 FIX: isolated print preview polish for test receipt/browser print */
+@media print {
+    body.thermal,
+    body.compact58,
+    body.smartpos-print-body {
+        background: #fff !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    body.thermal .sp-print-receipt,
+    body.thermal .sp-print-receipt-preview,
+    body.thermal #receiptDesignerPreview {
+        width: 72mm !important;
+        max-width: 72mm !important;
+        margin: 0 auto !important;
+        padding: 3mm !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        color: #000 !important;
+        background: #fff !important;
+        font-size: 11px !important;
+        line-height: 1.25 !important;
+    }
+
+    body.compact58 .sp-print-receipt,
+    body.compact58 .sp-print-receipt-preview,
+    body.compact58 #receiptDesignerPreview {
+        width: 52mm !important;
+        max-width: 52mm !important;
+        margin: 0 auto !important;
+        padding: 2.5mm !important;
+        font-size: 9px !important;
+        line-height: 1.2 !important;
+    }
+
+    body.a4 .sp-print-receipt,
+    body.a4 .sp-print-receipt-preview,
+    body.a4 #receiptDesignerPreview {
+        width: 180mm !important;
+        max-width: 180mm !important;
+        margin: 0 auto !important;
+        padding: 8mm !important;
+        font-size: 12px !important;
+        line-height: 1.35 !important;
+        border: 1px solid #e5e7eb !important;
+    }
+}

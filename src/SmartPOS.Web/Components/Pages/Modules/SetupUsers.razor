@@ -1,0 +1,136 @@
+@page "/setup/users"
+@attribute [Authorize(Policy = Permissions.Setup.UsersView)]
+@inject IUserAdminService UserService
+@inject IRoleAdminService RoleService
+@inject IStoreService StoreService
+@inject DialogService DialogService
+@inject NotificationService Notifications
+
+<PageTitle>Users · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Users</h1>
+        <p class="page-subtitle">Manage who can access SmartPOS, their roles, and assigned stores.</p>
+    </div>
+    <div class="toolbar-actions">
+        <RadzenButton Icon="add" Text="New user" Click="@(() => OpenEditor(null))" Disabled="@(!_canManage)" />
+    </div>
+</div>
+
+<RadzenCard class="content-card grid-card">
+    <RadzenDataGrid Data="@_users" TItem="AppUserDto" AllowFiltering="true" AllowSorting="true"
+                    AllowPaging="true" PageSize="10" FilterMode="FilterMode.Simple"
+                    EmptyText="No users yet." IsLoading="@_loading">
+        <Columns>
+            <RadzenDataGridColumn TItem="AppUserDto" Property="DisplayName" Title="Name" />
+            <RadzenDataGridColumn TItem="AppUserDto" Property="Email" Title="Email" />
+            <RadzenDataGridColumn TItem="AppUserDto" Title="Roles" Sortable="false" Filterable="false">
+                <Template Context="user">
+                    @if (user.Roles.Count == 0)
+                    {
+                        <RadzenText TextStyle="TextStyle.Caption" Style="color:var(--sp-text-muted)">—</RadzenText>
+                    }
+                    else
+                    {
+                        @foreach (var role in user.Roles)
+                        {
+                            <RadzenBadge Text="@role" BadgeStyle="BadgeStyle.Light" Style="margin:0 0.25rem 0.25rem 0" />
+                        }
+                    }
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="AppUserDto" Title="Stores" Sortable="false" Filterable="false" Width="90px" TextAlign="TextAlign.Center">
+                <Template Context="user">@user.StoreIds.Count</Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="AppUserDto" Property="IsActive" Title="Status" Width="120px" TextAlign="TextAlign.Center">
+                <Template Context="user">
+                    <span class="status-pill @(user.IsActive ? "on" : "off")">@(user.IsActive ? "Active" : "Disabled")</span>
+                </Template>
+            </RadzenDataGridColumn>
+            <RadzenDataGridColumn TItem="AppUserDto" Title="" Width="160px" Sortable="false" Filterable="false" TextAlign="TextAlign.End">
+                <Template Context="user">
+                    <RadzenButton Icon="edit" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small"
+                                  Click="@(() => OpenEditor(user))" Disabled="@(!_canManage)" />
+                    <RadzenButton Icon="@(user.IsActive ? "block" : "check_circle")" ButtonStyle="ButtonStyle.Light"
+                                  Size="ButtonSize.Small" Click="@(() => ToggleActiveAsync(user))"
+                                  Disabled="@(!_canManage)" Style="margin-left:0.35rem" />
+                </Template>
+            </RadzenDataGridColumn>
+        </Columns>
+    </RadzenDataGrid>
+</RadzenCard>
+
+@code {
+    private IReadOnlyList<AppUserDto> _users = [];
+    private IReadOnlyList<string> _roles = [];
+    private IReadOnlyList<StoreDto> _stores = [];
+    private bool _loading = true;
+    private bool _canManage;
+
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is not null)
+        {
+            var state = await AuthState;
+            _canManage = state.User.HasClaim(Permissions.ClaimType, Permissions.Setup.UsersManage);
+        }
+
+        _roles = (await RoleService.GetAllAsync()).Select(r => r.Name).ToList();
+        _stores = await StoreService.GetAllAsync(includeInactive: false);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _users = await UserService.GetAllAsync();
+        _loading = false;
+    }
+
+    private async Task OpenEditor(AppUserDto? user)
+    {
+        if (!_canManage)
+        {
+            return;
+        }
+
+        var model = user is null
+            ? new UserEditModel { IsActive = true }
+            : await UserService.GetAsync(user.Id) ?? new UserEditModel { IsActive = true };
+
+        var saved = await DialogService.OpenAsync<UserDialog>(
+            user is null ? "New user" : $"Edit · {user.DisplayName}",
+            new Dictionary<string, object>
+            {
+                [nameof(UserDialog.Model)] = model,
+                [nameof(UserDialog.Roles)] = _roles,
+                [nameof(UserDialog.Stores)] = _stores
+            },
+            new DialogOptions { Width = "720px", CloseDialogOnOverlayClick = false });
+
+        if (saved is true)
+        {
+            await LoadAsync();
+            Notify("Saved", "User saved successfully.", NotificationSeverity.Success);
+        }
+    }
+
+    private async Task ToggleActiveAsync(AppUserDto user)
+    {
+        var result = await UserService.SetActiveAsync(user.Id, !user.IsActive);
+        if (result.Succeeded)
+        {
+            await LoadAsync();
+        }
+        else
+        {
+            Notify("Action failed", result.Error ?? "Unknown error", NotificationSeverity.Error);
+        }
+    }
+
+    private void Notify(string summary, string detail, NotificationSeverity severity) =>
+        Notifications.Notify(new NotificationMessage { Severity = severity, Summary = summary, Detail = detail, Duration = 4000 });
+}

@@ -1,0 +1,63 @@
+@page "/error"
+@layout BlankLayout
+@inject NavigationManager Navigation
+@inject IJSRuntime JSRuntime
+@inject NotificationService NotificationService
+
+<PageTitle>Error · SmartPOS</PageTitle>
+
+<div class="status-page">
+    <div class="status-card">
+        <div class="status-emoji" style="color:var(--sp-danger);background:rgba(239,68,68,0.1)">
+            <RadzenIcon Icon="error_outline" />
+        </div>
+        <h2>Something went wrong</h2>
+        <p>@Message</p>
+
+        @if (!string.IsNullOrWhiteSpace(TraceReference))
+        {
+            <div class="trace-box">
+                <span class="trace-label">Trace reference</span>
+                <code>@TraceReference</code>
+                <RadzenButton Text="Copy" Icon="content_copy" ButtonStyle="ButtonStyle.Light"
+                              Size="ButtonSize.Small" Click="@CopyTraceReference" />
+            </div>
+            <p class="trace-label">Share this reference with support to locate the exact error.</p>
+        }
+
+        <div class="status-actions">
+            <RadzenButton Text="Back to Dashboard" Icon="dashboard" ButtonStyle="ButtonStyle.Primary"
+                          Click="@(() => Navigation.NavigateTo("/dashboard"))" />
+            <RadzenButton Text="Try Again" Icon="refresh" ButtonStyle="ButtonStyle.Light"
+                          Click="@(() => Navigation.NavigateTo(Navigation.Uri, forceLoad: true))" />
+        </div>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "trace")] public string? TraceReference { get; set; }
+    [SupplyParameterFromQuery(Name = "code")] public string? ErrorCode { get; set; }
+
+    private string Message => ErrorCode switch
+    {
+        "NOT_FOUND" => "The item you requested could not be found.",
+        "UNAUTHORIZED" => "You do not have permission to perform this action.",
+        "VALIDATION_ERROR" => "Please review your input and try again.",
+        _ => "An unexpected error occurred while processing your request."
+    };
+
+    private async Task CopyTraceReference()
+    {
+        if (!string.IsNullOrWhiteSpace(TraceReference))
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", TraceReference);
+            NotificationService.Notify(new NotificationMessage
+            {
+                Severity = NotificationSeverity.Success,
+                Summary = "Copied",
+                Detail = "Trace reference copied to clipboard.",
+                Duration = 2500
+            });
+        }
+    }
+}

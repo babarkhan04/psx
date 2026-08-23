@@ -1,0 +1,76 @@
+@inject IRoleAdminService RoleService
+@inject DialogService DialogService
+
+<RadzenStack Gap="1rem">
+    @if (_groups is null)
+    {
+        <RadzenText>Loading permissions…</RadzenText>
+    }
+    else
+    {
+        <div class="perm-matrix">
+            @foreach (var group in _groups)
+            {
+                <div class="perm-group">
+                    <h4>@group.Group</h4>
+                    @foreach (var item in group.Items)
+                    {
+                        <div class="perm-item">
+                            <RadzenCheckBox @bind-Value="item.Granted" Name="@item.Key" Disabled="@(!CanManage)" />
+                            <RadzenLabel Text="@item.Description" Component="@item.Key" />
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Close" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton Icon="save" Text="Save permissions" Click="@SaveAsync"
+                          IsBusy="@_saving" Disabled="@(_saving || !CanManage)" />
+        </RadzenStack>
+    }
+</RadzenStack>
+
+@code {
+    [Parameter] public string RoleId { get; set; } = string.Empty;
+    [Parameter] public bool CanManage { get; set; }
+
+    private IReadOnlyList<PermissionGroupDto>? _groups;
+    private bool _saving;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _groups = await RoleService.GetPermissionMatrixAsync(RoleId);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_groups is null)
+        {
+            return;
+        }
+
+        _saving = true;
+        _error = null;
+
+        var selected = _groups.SelectMany(g => g.Items).Where(i => i.Granted).Select(i => i.Key);
+        var result = await RoleService.SetPermissionsAsync(RoleId, selected);
+
+        _saving = false;
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

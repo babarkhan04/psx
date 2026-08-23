@@ -1,0 +1,131 @@
+@inject IShiftService ShiftService
+@inject DialogService DialogService
+
+<RadzenTemplateForm TItem="CloseShiftDto" Data="@Model" Submit="@OnSubmit">
+    <RadzenStack Gap="1rem">
+        <div class="receive-payment-summary">
+            <div><span>Shift</span><strong>@ShiftNumber</strong></div>
+            <div><span>Expected cash</span><strong>@ExpectedCash.ToString("C2")</strong></div>
+        </div>
+
+        <div class="denomination-panel">
+            <div class="denomination-header">
+                <div>
+                    <strong>Cash denomination count</strong>
+                    <small>Enter the notes/coins counted in the drawer. Counted cash updates automatically.</small>
+                </div>
+                <RadzenButton Text="Clear" Icon="backspace" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@ClearDenominations" />
+            </div>
+
+            <div class="denomination-grid denomination-grid-head">
+                <span>Note / Coin</span>
+                <span>Qty</span>
+                <span class="text-right">Amount</span>
+            </div>
+
+            @foreach (var line in Model.Denominations)
+            {
+                <div class="denomination-grid">
+                    <strong>@line.DenominationValue.ToString("C0")</strong>
+                    <RadzenNumeric TValue="int" @bind-Value="line.Quantity" @bind-Value:after="SyncCountedCashFromDenominations" Style="width:100%" />
+                    <strong class="text-right">@line.Amount.ToString("C2")</strong>
+                </div>
+            }
+        </div>
+
+        <div class="receive-payment-summary compact">
+            <div><span>Denomination total</span><strong>@DenominationTotal.ToString("C2")</strong></div>
+            <div><span>Manual / counted cash</span><strong>@Model.CountedCash.ToString("C2")</strong></div>
+        </div>
+
+        <RadzenFormField Text="Counted cash in drawer (manual override if no denominations entered)" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenNumeric @bind-Value="Model.CountedCash" />
+        </RadzenFormField>
+
+        @if (Model.CountedCash > 0 || ExpectedCash > 0)
+        {
+            <RadzenAlert AlertStyle="@(Variance == 0 ? AlertStyle.Success : AlertStyle.Warning)" Variant="Variant.Flat" AllowClose="false">
+                Variance: <strong>@Variance.ToString("C2")</strong>
+                @(Variance == 0 ? " — balanced" : Variance > 0 ? " — over" : " — short")
+            </RadzenAlert>
+        }
+
+        <RadzenFormField Text="Closing notes (optional)" Variant="Variant.Outlined" Style="width:100%">
+            <RadzenTextArea @bind-Value="Model.Notes" Rows="2" />
+        </RadzenFormField>
+
+        @if (_error is not null)
+        {
+            <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+        }
+
+        <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
+            <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
+            <RadzenButton ButtonType="ButtonType.Submit" Icon="stop" Text="Close shift" ButtonStyle="ButtonStyle.Primary"
+                          IsBusy="@_saving" Disabled="@_saving" />
+        </RadzenStack>
+    </RadzenStack>
+</RadzenTemplateForm>
+
+@code {
+    [Parameter] public Guid ShiftId { get; set; }
+    [Parameter] public string ShiftNumber { get; set; } = string.Empty;
+    [Parameter] public decimal ExpectedCash { get; set; }
+
+    private CloseShiftDto Model = new();
+    private bool _saving;
+    private string? _error;
+
+    private decimal DenominationTotal => Model.Denominations.Where(x => x.Quantity > 0).Sum(x => x.Amount);
+    private decimal Variance => Model.CountedCash - ExpectedCash;
+
+    protected override void OnInitialized()
+    {
+        Model.ShiftId = ShiftId;
+        Model.CountedCash = ExpectedCash;
+        Model.Denominations = DefaultDenominations();
+    }
+
+    private static List<CashDenominationLineDto> DefaultDenominations()
+    {
+        decimal[] values = [5000m, 1000m, 500m, 100m, 50m, 20m, 10m, 5m, 2m, 1m];
+        return values.Select((value, index) => new CashDenominationLineDto
+        {
+            DenominationValue = value,
+            Quantity = 0,
+            SortOrder = index + 1
+        }).ToList();
+    }
+
+    private void SyncCountedCashFromDenominations()
+    {
+        Model.CountedCash = DenominationTotal;
+    }
+
+    private void ClearDenominations()
+    {
+        foreach (var line in Model.Denominations)
+        {
+            line.Quantity = 0;
+        }
+
+        Model.CountedCash = ExpectedCash;
+    }
+
+    private async Task OnSubmit()
+    {
+        _saving = true;
+        _error = null;
+        var result = await ShiftService.CloseShiftAsync(Model);
+        _saving = false;
+
+        if (result.Succeeded)
+        {
+            DialogService.Close(true);
+        }
+        else
+        {
+            _error = result.Error;
+        }
+    }
+}

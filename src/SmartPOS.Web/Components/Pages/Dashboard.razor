@@ -1,0 +1,269 @@
+@page "/dashboard"
+@attribute [Authorize]
+@inject IDashboardService DashboardService
+@inject IAlertService AlertService
+@inject IStoreContext StoreContext
+@inject NavigationManager Navigation
+
+<PageTitle>Dashboard · SmartPOS</PageTitle>
+
+<div class="page-header">
+    <div>
+        <div class="breadcrumb">
+            <RadzenIcon Icon="home" /> <span>Home</span>
+            <RadzenIcon Icon="chevron_right" /> <span>Command Center</span>
+        </div>
+        <h1>Owner Command Center</h1>
+        <p class="page-subtitle">Live sales, profit, stock health, payment mix, and action alerts.</p>
+    </div>
+    <RadzenButton Text="Open POS" Icon="point_of_sale" ButtonStyle="ButtonStyle.Primary"
+                  Click="@(() => Navigation.NavigateTo("/pos"))" />
+</div>
+
+@if (_loading)
+{
+    <div class="kpi-grid">
+        @for (var i = 0; i < 4; i++)
+        {
+            <div class="kpi-card kpi-skeleton"><RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" Size="ProgressBarCircularSize.Small" /></div>
+        }
+    </div>
+}
+else if (_summary is not null)
+{
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <div class="kpi-top">
+                <span class="kpi-label">Today's Net Sales</span>
+                <span class="kpi-chip chip-sales"><RadzenIcon Icon="payments" /></span>
+            </div>
+            <div class="kpi-value">@FormatMoney(_summary.TodaySales)</div>
+            <div class="kpi-meta">
+                <span>@_summary.TodayTransactions transactions</span>
+                @if (_summary.AverageBasket > 0)
+                {
+                    <span>· Avg basket @FormatMoney(_summary.AverageBasket)</span>
+                }
+            </div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-top">
+                <span class="kpi-label">Today's Gross Profit</span>
+                <span class="kpi-chip chip-cash"><RadzenIcon Icon="trending_up" /></span>
+            </div>
+            <div class="kpi-value">@FormatMoney(_summary.TodayProfit)</div>
+            <div class="kpi-meta positive">
+                <span>@_summary.TodayMarginPercent.ToString("0.#")% margin</span>
+                @if (_summary.TodayDiscounts > 0)
+                {
+                    <span>· @FormatMoney(_summary.TodayDiscounts) discount</span>
+                }
+            </div>
+        </div>
+
+        <div class="kpi-card">
+            <div class="kpi-top">
+                <span class="kpi-label">Inventory Value</span>
+                <span class="kpi-chip chip-tx"><RadzenIcon Icon="inventory_2" /></span>
+            </div>
+            <div class="kpi-value">@FormatMoney(_summary.InventoryRetailValue)</div>
+            <div class="kpi-meta">@_summary.ActiveProductCount active products · @_summary.StoreCount stores</div>
+        </div>
+
+        <div class="kpi-card" @onclick="@(() => Navigation.NavigateTo("/alerts"))" style="cursor:pointer">
+            <div class="kpi-top">
+                <span class="kpi-label">Smart Alerts</span>
+                <span class="kpi-chip chip-stock"><RadzenIcon Icon="notifications_active" /></span>
+            </div>
+            <div class="kpi-value">@(_smartAlerts?.Summary.Total ?? 0)</div>
+            <div class="kpi-meta warning">
+                @if ((_smartAlerts?.Summary.Critical ?? 0) > 0)
+                {
+                    <span><RadzenIcon Icon="priority_high" Style="font-size:0.9rem" /> @_smartAlerts!.Summary.Critical critical</span>
+                }
+                else if ((_smartAlerts?.Summary.Warning ?? 0) > 0)
+                {
+                    <span>@_smartAlerts!.Summary.Warning warning</span>
+                }
+                else
+                {
+                    <span>No active risk alerts</span>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-grid dashboard-grid-enhanced">
+        <div class="panel-card span-2">
+            <div class="panel-header">
+                <div>
+                    <h3>Sales Performance</h3>
+                    <p class="panel-subtitle">Last 7 days net sales with transaction count.</p>
+                </div>
+                <RadzenBadge Text="Last 7 days" BadgeStyle="BadgeStyle.Info" />
+            </div>
+            <RadzenChart>
+                <RadzenColumnSeries Data="@_summary.ActivityTrend" CategoryProperty="Label" ValueProperty="Amount" Title="Net Sales" />
+                <RadzenCategoryAxis Padding="20" />
+                <RadzenValueAxis />
+            </RadzenChart>
+            <div class="dashboard-insight-row">
+                @foreach (var point in _summary.ActivityTrend)
+                {
+                    <div class="dashboard-mini-metric">
+                        <span>@point.Label</span>
+                        <strong>@FormatMoney(point.Amount)</strong>
+                        <small>@point.Count tx · Profit @FormatMoney(point.Profit)</small>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="panel-card">
+            <div class="panel-header"><h3>Payment Mix</h3></div>
+            @if (_summary.PaymentMix.Count == 0)
+            {
+                <p class="panel-footnote">No payments recorded in the last 7 days.</p>
+            }
+            else
+            {
+                <div class="payment-mix-list">
+                    @foreach (var item in _summary.PaymentMix)
+                    {
+                        <div class="payment-mix-item">
+                            <div>
+                                <strong>@item.Method</strong>
+                                <small>@item.Count payment line(s)</small>
+                            </div>
+                            <div class="payment-mix-value">
+                                <strong>@FormatMoney(item.Amount)</strong>
+                                <small>@item.SharePercent.ToString("0.#")%</small>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="panel-card">
+            <div class="panel-header"><h3>Quick Actions</h3></div>
+            <div class="quick-actions">
+                <RadzenButton Text="New Sale" Icon="add_shopping_cart" ButtonStyle="ButtonStyle.Primary" Style="width:100%" Click="@(() => Navigation.NavigateTo("/pos"))" />
+                <RadzenButton Text="Smart Reorder" Icon="auto_awesome" ButtonStyle="ButtonStyle.Light" Style="width:100%" Click="@(() => Navigation.NavigateTo("/reorder"))" />
+                <RadzenButton Text="Stock Transfer" Icon="sync_alt" ButtonStyle="ButtonStyle.Light" Style="width:100%" Click="@(() => Navigation.NavigateTo("/transfers"))" />
+                <RadzenButton Text="View Reports" Icon="assessment" ButtonStyle="ButtonStyle.Light" Style="width:100%" Click="@(() => Navigation.NavigateTo("/reports"))" />
+            </div>
+        </div>
+
+        <div class="panel-card span-2">
+            <div class="panel-header">
+                <div>
+                    <h3>Store Performance</h3>
+                    <p class="panel-subtitle">Compare sales, profit, margin, and stock issues by branch.</p>
+                </div>
+                <RadzenBadge Text="Sales + stock" BadgeStyle="BadgeStyle.Light" />
+            </div>
+            @if (_summary.StorePerformance.Count == 0)
+            {
+                <p class="panel-footnote">No store activity yet. Create sales or stock records to see rankings here.</p>
+            }
+            else
+            {
+                <RadzenDataGrid Data="@_summary.StorePerformance" TItem="DashboardStorePerformanceDto" AllowPaging="false" Density="Density.Compact">
+                    <Columns>
+                        <RadzenDataGridColumn Property="@nameof(DashboardStorePerformanceDto.StoreName)" Title="Store" />
+                        <RadzenDataGridColumn Property="@nameof(DashboardStorePerformanceDto.NetSales)" Title="7d sales" FormatString="{0:C0}" />
+                        <RadzenDataGridColumn Property="@nameof(DashboardStorePerformanceDto.GrossProfit)" Title="7d profit" FormatString="{0:C0}" />
+                        <RadzenDataGridColumn Property="@nameof(DashboardStorePerformanceDto.MarginPercent)" Title="Margin" Width="95px">
+                            <Template Context="s">@s.MarginPercent.ToString("0.#")%</Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Property="@nameof(DashboardStorePerformanceDto.Transactions)" Title="Tx" Width="70px" />
+                        <RadzenDataGridColumn Property="@nameof(DashboardStorePerformanceDto.LowStockItems)" Title="Low stock" Width="100px" />
+                    </Columns>
+                </RadzenDataGrid>
+            }
+        </div>
+
+        <div class="panel-card">
+            <div class="panel-header">
+                <h3>Stock Snapshot</h3>
+                <RadzenBadge Text="Inventory" BadgeStyle="BadgeStyle.Light" />
+            </div>
+            @if (_summary.StoreSnapshots.Count == 0)
+            {
+                <p class="panel-footnote">Add stores and stock to see stock value here.</p>
+            }
+            else
+            {
+                <RadzenDataGrid Data="@_summary.StoreSnapshots.Take(6)" TItem="DashboardStoreSnapshotDto" AllowPaging="false" Density="Density.Compact">
+                    <Columns>
+                        <RadzenDataGridColumn Property="@nameof(DashboardStoreSnapshotDto.StoreName)" Title="Store" />
+                        <RadzenDataGridColumn Property="@nameof(DashboardStoreSnapshotDto.RetailValue)" Title="Stock value" FormatString="{0:C0}" />
+                        <RadzenDataGridColumn Property="@nameof(DashboardStoreSnapshotDto.LowStockItems)" Title="Low" Width="70px" />
+                    </Columns>
+                </RadzenDataGrid>
+            }
+        </div>
+
+        <div class="panel-card">
+            <div class="panel-header">
+                <h3>Recent Alerts</h3>
+                @if ((_smartAlerts?.Summary.Total ?? 0) > 0)
+                {
+                    <RadzenBadge Text="@($"{_smartAlerts!.Summary.Total} active")" BadgeStyle="BadgeStyle.Danger" IsPill="true" />
+                }
+            </div>
+            @if (_smartAlerts is null || _smartAlerts.Alerts.Count == 0)
+            {
+                <p class="panel-footnote">No active alerts — operations look healthy.</p>
+            }
+            else
+            {
+                <RadzenDataGrid Data="@_smartAlerts.Alerts.Take(8)" TItem="SmartAlertDto" AllowPaging="false" Density="Density.Compact">
+                    <Columns>
+                        <RadzenDataGridColumn Property="@nameof(SmartAlertDto.Severity)" Title="Severity" Width="105px">
+                            <Template Context="a">
+                                <RadzenBadge Text="@a.Severity" IsPill="true" BadgeStyle="@AlertSeverityStyle(a.Severity)" />
+                            </Template>
+                        </RadzenDataGridColumn>
+                        <RadzenDataGridColumn Property="@nameof(SmartAlertDto.Message)" Title="Alert" />
+                        <RadzenDataGridColumn Property="@nameof(SmartAlertDto.StoreName)" Title="Store" Width="140px" />
+                    </Columns>
+                </RadzenDataGrid>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private DashboardSummaryDto? _summary;
+    private SmartAlertsPageDto? _smartAlerts;
+    private bool _loading = true;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _loaded)
+        {
+            return;
+        }
+
+        _loaded = true;
+        _summary = await DashboardService.GetSummaryAsync();
+        _smartAlerts = await AlertService.GetAlertsAsync(new SmartAlertQueryDto { StoreId = StoreContext.StoreId, IncludeInfo = true });
+        _loading = false;
+        StateHasChanged();
+    }
+
+    private bool _loaded;
+
+    private static string FormatMoney(decimal amount) => amount.ToString("C0");
+
+    private static BadgeStyle AlertSeverityStyle(string severity) => severity switch
+    {
+        "Critical" => BadgeStyle.Danger,
+        "Warning" => BadgeStyle.Warning,
+        "Info" => BadgeStyle.Info,
+        _ => BadgeStyle.Light
+    };
+}
