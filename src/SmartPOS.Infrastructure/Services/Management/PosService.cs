@@ -1,4 +1,8 @@
 using System.Data;
+using Microsoft.Extensions.Options;
+using SmartPOS.Application.Common.Options;
+using SmartPOS.Application.Sales;
+using SmartPOS.Domain.Authorization;
 using Microsoft.EntityFrameworkCore;
 using SmartPOS.Application.Common.Interfaces;
 using SmartPOS.Application.Common.Models;
@@ -14,7 +18,10 @@ public sealed class PosService(
     ICurrentUserService currentUser,
     IDateTimeProvider clock,
     INumberSequenceService numberSequence,
-    DbContextGate gate) : IPosService
+    DbContextGate gate,
+    IStoreAccessService storeAccess,
+    IUserContextAccessor userContext,
+    IOptions<PosSecurityOptions> security) : IPosService
 {
     private const int DefaultHeldSaleExpiryMinutes = 24 * 60;
     private const int MinimumHeldSaleExpiryMinutes = 15;
@@ -74,6 +81,11 @@ public sealed class PosService(
 
     private async Task<PosContextDto?> GetContextCoreAsync(Guid storeId, CancellationToken ct)
     {
+        await storeAccess.EnsureCanAccessStoreAsync(storeId, ct);
+        await storeAccess.EnsureCanAccessStoreAsync(storeId, ct);
+        await storeAccess.EnsureCanAccessStoreAsync(storeId, ct);
+        await storeAccess.EnsureCanAccessStoreAsync(storeId, ct);
+        await storeAccess.EnsureCanAccessStoreAsync(storeId, ct);
         var store = await db.Stores.AsNoTracking()
             .FirstOrDefaultAsync(s => s.Id == storeId && s.IsActive, ct);
         if (store is null)
@@ -258,6 +270,9 @@ public sealed class PosService(
         decimal? variantPrice,
         CancellationToken ct)
     {
+        var variant = variantId is { } id
+            ? await db.ProductVariants.AsNoTracking().FirstOrDefaultAsync(item => item.Id == id && item.ProductId == product.Id, ct)
+            : null;
         decimal unitPrice;
         if (variantPrice is not null)
         {
@@ -277,8 +292,8 @@ public sealed class PosService(
         {
             ProductId = product.Id,
             VariantId = variantId,
-            Sku = product.Sku,
-            Name = product.Name,
+            Sku = variant?.Sku ?? product.Sku,
+            Name = variant is null ? product.Name : $"{product.Name} · {variant.Name}",
             ImageUrl = product.ImageUrl,
             UnitPrice = unitPrice,
             TaxRate = product.TaxCategory?.Rate ?? 0,
@@ -323,6 +338,16 @@ public sealed class PosService(
 
     private async Task<Result<Guid>> HoldSaleCoreAsync(HoldSaleDto dto, CancellationToken ct)
     {
+        EnsurePermission(Permissions.Sales.Operate);
+        await storeAccess.EnsureCanAccessStoreAsync(dto.StoreId, ct);
+        if (dto.Lines is null || dto.Lines.Count > 500)
+            return Result<Guid>.Failure("Invalid cart lines.", "VALIDATION");
+        var trusted = await ResolveCheckoutLinesAsync(dto.StoreId, dto.Lines, ct);
+        if (!trusted.Succeeded || trusted.Data is null)
+            return Result<Guid>.Failure(trusted.Error!, trusted.ErrorCode!);
+        dto.Lines = trusted.Data;
+        if (!await db.Registers.AnyAsync(r => r.Id == dto.RegisterId && r.StoreId == dto.StoreId && r.IsActive, ct))
+            return Result<Guid>.Failure("Register not found or inactive.", "NOT_FOUND");
         if (dto.Lines.Count == 0)
         {
             return Result<Guid>.Failure("Cart is empty.", "EMPTY_CART");
@@ -466,6 +491,8 @@ public sealed class PosService(
             return null;
         }
 
+        await storeAccess.EnsureCanAccessStoreAsync(heldSale.StoreId, ct);
+
         if (heldSale.ExpiresOn is not null && heldSale.ExpiresOn <= now)
         {
             heldSale.Status = HeldSaleStatus.Expired;
@@ -511,6 +538,8 @@ public sealed class PosService(
             return Result.Failure("Held sale not found or already closed.", "NOT_FOUND");
         }
 
+        await storeAccess.EnsureCanAccessStoreAsync(heldSale.StoreId, ct);
+
         var now = clock.UtcNow;
         heldSale.Status = HeldSaleStatus.Cancelled;
         heldSale.CancelledOn = now;
@@ -548,112 +577,134 @@ public sealed class PosService(
 
     private async Task<Result<PosReceiptDto>> CompleteSaleCoreAsync(PosCheckoutDto checkout, CancellationToken ct)
     {
-        if (checkout.Lines.Count == 0)
-        {
-            return Result<PosReceiptDto>.Failure("Cart is empty.", "EMPTY_CART");
-        }
-
-        var store = await db.Stores.AsNoTracking().FirstOrDefaultAsync(s => s.Id == checkout.StoreId, ct);
-        if (store is null)
-        {
-            return Result<PosReceiptDto>.Failure("Store not found.", "NOT_FOUND");
-        }
-
-        var register = await db.Registers.AsNoTracking()
-            .FirstOrDefaultAsync(r => r.Id == checkout.RegisterId && r.StoreId == checkout.StoreId, ct);
-        if (register is null)
-        {
-            return Result<PosReceiptDto>.Failure("Register not found.", "NOT_FOUND");
-        }
-
-        Shift? shift = null;
-        if (register.HasCashDrawer)
-        {
-            shift = await db.Shifts.FirstOrDefaultAsync(
-                s => s.RegisterId == register.Id && s.Status == ShiftStatus.Open, ct);
-            if (shift is null)
-            {
-                return Result<PosReceiptDto>.Failure(
-                    "Open a shift on this register before processing sales.", "NO_SHIFT");
-            }
-        }
-
-        var discountValidation = ValidateDiscounts(checkout.Lines, checkout.InvoiceDiscountAmount);
-        if (discountValidation is not null)
-        {
-            return Result<PosReceiptDto>.Failure(discountValidation, "INVALID_DISCOUNT");
-        }
-
-        var totals = CalculateTotals(checkout.Lines, checkout.InvoiceDiscountAmount);
-        var total = totals.TotalAmount;
-
-        var paymentResult = ResolvePayments(checkout, total);
-        if (!paymentResult.Succeeded || paymentResult.Data is null)
-        {
-            return Result<PosReceiptDto>.Failure(paymentResult.Error ?? "Invalid payment.", paymentResult.ErrorCode ?? "INVALID_PAYMENT");
-        }
-
-        var resolvedPayments = paymentResult.Data.Payments;
-        var amountPaid = paymentResult.Data.AmountPaid;
-        var changeDue = paymentResult.Data.ChangeDue;
-        var creditAmount = resolvedPayments.Where(p => p.Method == PaymentMethod.Credit).Sum(p => p.Amount);
-        var cashAmount = resolvedPayments.Where(p => p.Method == PaymentMethod.Cash).Sum(p => p.Amount);
-
-        Customer? creditCustomer = null;
-        if (creditAmount > 0)
-        {
-            if (checkout.CustomerId is not { } customerId)
-            {
-                return Result<PosReceiptDto>.Failure("Select a customer when any payment line uses credit/udhaar.", "CUSTOMER_REQUIRED");
-            }
-
-            creditCustomer = await db.Customers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == customerId && c.IsActive, ct);
-            if (creditCustomer is null)
-            {
-                return Result<PosReceiptDto>.Failure("Customer not found or inactive.", "NOT_FOUND");
-            }
-
-            if (creditCustomer.CreditLimit > 0 && creditCustomer.Balance + creditAmount > creditCustomer.CreditLimit)
-            {
-                var available = Math.Max(0, creditCustomer.CreditLimit - creditCustomer.Balance);
-                return Result<PosReceiptDto>.Failure(
-                    $"Credit limit exceeded. Available credit is {available:0.00}.", "CREDIT_LIMIT");
-            }
-        }
-
-        var now = clock.UtcNow;
-
-        if (checkout.HeldSaleId is { } preHeldSaleId)
-        {
-            var preHeldSale = await db.HeldSales.FirstOrDefaultAsync(
-                h => h.Id == preHeldSaleId
-                     && h.StoreId == checkout.StoreId
-                     && h.RegisterId == checkout.RegisterId, ct);
-
-            if (preHeldSale is null || preHeldSale.Status != HeldSaleStatus.Open)
-            {
-                return Result<PosReceiptDto>.Failure("Held sale not found or already closed.", "HELD_SALE_NOT_FOUND");
-            }
-
-            if (preHeldSale.ExpiresOn is not null && preHeldSale.ExpiresOn <= now)
-            {
-                preHeldSale.Status = HeldSaleStatus.Expired;
-                preHeldSale.ExpiredOn = now;
-                preHeldSale.ExpiryReason = "Expired automatically before checkout.";
-                await db.SaveChangesAsync(ct);
-                return Result<PosReceiptDto>.Failure("This held sale has expired. Please create a new sale.", "HELD_SALE_EXPIRED");
-            }
-        }
-
-        // EnableRetryOnFailure installs a retrying execution strategy, which forbids
-        // manual BeginTransaction. Run the whole unit through the strategy so a transient
-        // failure retries the entire transaction atomically.
+        EnsurePermission(Permissions.Sales.Operate);
+        await storeAccess.EnsureCanAccessStoreAsync(checkout.StoreId, ct);
+        if (checkout.Lines is null || checkout.Lines.Count == 0 || checkout.Lines.Count > 500)
+            return Result<PosReceiptDto>.Failure("Add between one and 500 cart lines.", "EMPTY_CART");
+        checkout.Payments ??= [];
         var strategy = db.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
-            // Clear any stale tracked entities so retries start clean.
             db.ChangeTracker.Clear();
             await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+            var now = clock.UtcNow;
+            var store = await db.Stores.AsNoTracking().FirstOrDefaultAsync(s => s.Id == checkout.StoreId && s.IsActive, ct);
+            if (store is null)
+            {
+                return Result<PosReceiptDto>.Failure("Store not found.", "NOT_FOUND");
+            }
+
+            var register = await db.Registers.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == checkout.RegisterId && r.StoreId == checkout.StoreId && r.IsActive, ct);
+            if (register is null)
+            {
+                return Result<PosReceiptDto>.Failure("Register not found.", "NOT_FOUND");
+            }
+
+            var trustedLines = await ResolveCheckoutLinesAsync(checkout.StoreId, checkout.Lines, ct);
+            if (!trustedLines.Succeeded || trustedLines.Data is null)
+                return Result<PosReceiptDto>.Failure(trustedLines.Error!, trustedLines.ErrorCode!);
+            checkout.Lines = trustedLines.Data;
+
+            Shift? shift = null;
+            if (register.HasCashDrawer)
+            {
+                shift = await db.Shifts.FirstOrDefaultAsync(
+                    s => s.RegisterId == register.Id && s.Status == ShiftStatus.Open, ct);
+                if (shift is null)
+                {
+                    return Result<PosReceiptDto>.Failure(
+                        "Open a shift on this register before processing sales.", "NO_SHIFT");
+                }
+            }
+
+            var discountValidation = ValidateDiscounts(checkout.Lines, checkout.InvoiceDiscountAmount);
+            if (discountValidation is not null)
+            {
+                return Result<PosReceiptDto>.Failure(discountValidation, "INVALID_DISCOUNT");
+            }
+
+            if (checkout.InvoiceDiscountAmount > 0 && ((checkout.DiscountReason?.Trim().Length ?? 0) < 3 || (checkout.DiscountReason?.Trim().Length ?? 0) > 300))
+                return Result<PosReceiptDto>.Failure("Enter an invoice discount reason between three and 300 characters.", "INVALID_DISCOUNT");
+
+            var discountApproval = await ValidateDiscountApprovalsAsync(checkout, ct);
+            if (!discountApproval.Succeeded)
+                return Result<PosReceiptDto>.Failure(discountApproval.Error!, discountApproval.ErrorCode!);
+
+            var totals = CalculateTotals(checkout.Lines, checkout.InvoiceDiscountAmount);
+            var total = totals.TotalAmount;
+
+            var paymentResult = ResolvePayments(checkout, total);
+            if (!paymentResult.Succeeded || paymentResult.Data is null)
+            {
+                return Result<PosReceiptDto>.Failure(paymentResult.Error ?? "Invalid payment.", paymentResult.ErrorCode ?? "INVALID_PAYMENT");
+            }
+
+            var resolvedPayments = paymentResult.Data.Payments;
+            var amountPaid = paymentResult.Data.AmountPaid;
+            var changeDue = paymentResult.Data.ChangeDue;
+            var creditAmount = resolvedPayments.Where(p => p.Method == PaymentMethod.Credit).Sum(p => p.Amount);
+            var cashAmount = resolvedPayments.Where(p => p.Method == PaymentMethod.Cash).Sum(p => p.Amount);
+
+            Customer? selectedCustomer = null;
+            if (checkout.CustomerId is { } selectedCustomerId)
+            {
+                selectedCustomer = await db.Customers.FirstOrDefaultAsync(c => c.Id == selectedCustomerId && c.IsActive, ct);
+                if (selectedCustomer is null)
+                    return Result<PosReceiptDto>.Failure("Customer not found or inactive.", "NOT_FOUND");
+                checkout.CustomerName = selectedCustomer.Name;
+            }
+            else
+            {
+                checkout.CustomerName = "Walk-In Customer";
+            }
+
+            Customer? creditCustomer = null;
+            if (creditAmount > 0)
+            {
+                if (checkout.CustomerId is not { } customerId)
+                {
+                    return Result<PosReceiptDto>.Failure("Select a customer when any payment line uses credit/udhaar.", "CUSTOMER_REQUIRED");
+                }
+
+                creditCustomer = selectedCustomer;
+                if (creditCustomer is null)
+                {
+                    return Result<PosReceiptDto>.Failure("Customer not found or inactive.", "NOT_FOUND");
+                }
+
+                if (creditCustomer.CreditLimit <= 0)
+                    return Result<PosReceiptDto>.Failure("This customer is cash-only. Set a credit limit before using udhaar.", "CREDIT_DISABLED");
+                if (creditCustomer.Balance + creditAmount > creditCustomer.CreditLimit)
+                {
+                    var available = Math.Max(0, creditCustomer.CreditLimit - creditCustomer.Balance);
+                    return Result<PosReceiptDto>.Failure(
+                        $"Credit limit exceeded. Available credit is {available:0.00}.", "CREDIT_LIMIT");
+                }
+            }
+
+
+            if (checkout.HeldSaleId is { } preHeldSaleId)
+            {
+                var preHeldSale = await db.HeldSales.FirstOrDefaultAsync(
+                    h => h.Id == preHeldSaleId
+                         && h.StoreId == checkout.StoreId
+                         && h.RegisterId == checkout.RegisterId, ct);
+
+                if (preHeldSale is null || preHeldSale.Status != HeldSaleStatus.Open)
+                {
+                    return Result<PosReceiptDto>.Failure("Held sale not found or already closed.", "HELD_SALE_NOT_FOUND");
+                }
+
+                if (preHeldSale.ExpiresOn is not null && preHeldSale.ExpiresOn <= now)
+                {
+                    preHeldSale.Status = HeldSaleStatus.Expired;
+                    preHeldSale.ExpiredOn = now;
+                    preHeldSale.ExpiryReason = "Expired automatically before checkout.";
+                    await db.SaveChangesAsync(ct);
+                    return Result<PosReceiptDto>.Failure("This held sale has expired. Please create a new sale.", "HELD_SALE_EXPIRED");
+                }
+            }
 
             var saleNumber = await GenerateSaleNumberAsync(store.Code, store.TenantId, checkout.StoreId, now, ct);
 
@@ -670,6 +721,7 @@ public sealed class PosService(
                 Subtotal = totals.GrossSubtotal,
                 DiscountAmount = totals.TotalDiscount,
                 DiscountReason = checkout.DiscountReason?.Trim(),
+                DiscountApprovedByUserId = string.IsNullOrWhiteSpace(discountApproval.Data) ? null : discountApproval.Data,
                 TaxAmount = totals.TaxAmount,
                 TotalAmount = totals.TotalAmount,
                 AmountPaid = amountPaid,
@@ -715,7 +767,10 @@ public sealed class PosService(
                     ProductName = line.Name,
                     Quantity = line.Quantity,
                     UnitPrice = line.UnitPrice,
-                    CostPrice = product.CostPrice,
+                    CostPrice = line.VariantId is { } variantId
+                        ? await db.ProductVariants.Where(v => v.Id == variantId && v.ProductId == product.Id)
+                            .Select(v => v.CostPrice ?? product.CostPrice).FirstAsync(ct)
+                        : product.CostPrice,
                     DiscountAmount = line.LineDiscount,
                     DiscountReason = line.DiscountReason?.Trim(),
                     TaxRate = line.TaxRate,
@@ -845,6 +900,12 @@ public sealed class PosService(
     {
         foreach (var line in lines)
         {
+            if (line.Quantity <= 0 || line.Quantity > 999999999m || Math.Round(line.Quantity, 3) != line.Quantity)
+                return $"Enter a positive quantity with at most three decimal places for {line.Sku}.";
+            if (line.UnitPrice < 0 || line.TaxRate < 0 || line.TaxRate > 100)
+                return $"Invalid price or tax for {line.Sku}.";
+            if (line.DiscountAmount > 0 && ((line.DiscountReason?.Trim().Length ?? 0) < 3 || (line.DiscountReason?.Trim().Length ?? 0) > 300))
+                return $"Enter a reason between three and 300 characters for the discount on {line.Sku}.";
             if (line.DiscountAmount < 0)
             {
                 return $"Discount cannot be negative for {line.Sku}.";
@@ -857,6 +918,8 @@ public sealed class PosService(
         }
 
         var discountBase = Math.Round(lines.Sum(l => l.LineSubtotal) + lines.Sum(l => l.LineTax), 2);
+        if (discountBase > 9999999999999999.99m || lines.Sum(line => line.LineGross) > 9999999999999999.99m)
+            return "The invoice amount exceeds the supported limit.";
         if (invoiceDiscountAmount < 0)
         {
             return "Invoice discount cannot be negative.";
@@ -888,13 +951,16 @@ public sealed class PosService(
     private static Result<ResolvedPayments> ResolvePayments(PosCheckoutDto checkout, decimal total)
     {
         var roundedTotal = Math.Round(total, 2);
+        if (checkout.AmountTendered < 0 || checkout.AmountTendered > 9999999999999999.99m ||
+            checkout.Payments.Count > 100 || checkout.Payments.Any(payment => payment is null || payment.Amount < 0 || payment.Amount > 9999999999999999.99m))
+            return Result<ResolvedPayments>.Failure("Enter valid, non-negative payment amounts.", "INVALID_PAYMENT");
 
         if (checkout.Payments.Count > 0)
         {
             var lines = new List<ResolvedPaymentLine>();
             foreach (var input in checkout.Payments.Where(p => p.Amount > 0))
             {
-                if (!Enum.TryParse<PaymentMethod>(input.Method, true, out var method))
+                if (!Enum.TryParse<PaymentMethod>(input.Method, true, out var method) || !Enum.IsDefined(method))
                 {
                     return Result<ResolvedPayments>.Failure($"Invalid payment method: {input.Method}.", "INVALID_PAYMENT");
                 }
@@ -919,7 +985,7 @@ public sealed class PosService(
             return Result<ResolvedPayments>.Success(new ResolvedPayments(lines, nonCreditPaid, 0m));
         }
 
-        if (!Enum.TryParse<PaymentMethod>(checkout.PaymentMethod, true, out var paymentMethod))
+        if (!Enum.TryParse<PaymentMethod>(checkout.PaymentMethod, true, out var paymentMethod) || !Enum.IsDefined(paymentMethod))
         {
             return Result<ResolvedPayments>.Failure("Invalid payment method.", "INVALID_PAYMENT");
         }
@@ -985,8 +1051,8 @@ public sealed class PosService(
         string reference,
         CancellationToken ct)
     {
-        var stock = await db.Stocks
-            .FirstOrDefaultAsync(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId, ct);
+        var stock = db.Stocks.Local.FirstOrDefault(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId)
+            ?? await db.Stocks.FirstOrDefaultAsync(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId, ct);
 
         if (stock is null)
         {
@@ -1000,6 +1066,8 @@ public sealed class PosService(
             db.Stocks.Add(stock);
         }
 
+        if (quantity <= 0)
+            return Result.Failure("Sale quantity must be greater than zero.", "INVALID_QUANTITY");
         var change = -quantity;
         var newQty = stock.QuantityOnHand + change;
         if (newQty < 0)
@@ -1036,6 +1104,7 @@ public sealed class PosService(
 
     private async Task<PosReceiptDto?> GetReceiptCoreAsync(Guid saleId, CancellationToken ct)
     {
+        EnsurePermission(Permissions.Sales.View, Permissions.Sales.Operate);
         var sale = await db.Sales.AsNoTracking()
             .Include(s => s.Lines)
             .Include(s => s.Payments)
@@ -1048,6 +1117,8 @@ public sealed class PosService(
         {
             return null;
         }
+
+        await storeAccess.EnsureCanAccessStoreAsync(sale.StoreId, ct);
 
         var orderedPayments = sale.Payments.OrderBy(p => p.ReceivedOn).ThenBy(p => p.Id).ToList();
         var reprintLogs = sale.ReceiptReprintLogs
@@ -1114,6 +1185,8 @@ public sealed class PosService(
             return Result.Failure("Sale not found.", "NOT_FOUND");
         }
 
+        await storeAccess.EnsureCanAccessStoreAsync(sale.StoreId, ct);
+
         var userId = currentUser.UserId ?? string.Empty;
         var userName = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId)
@@ -1164,7 +1237,12 @@ public sealed class PosService(
 
     private async Task<SalesPageDto> GetSalesCoreAsync(SalesQueryDto query, CancellationToken ct)
     {
+        EnsurePermission(Permissions.Sales.View);
+        var allowedStoreIds = await storeAccess.GetAllowedStoreIdsAsync(ct);
+        if (query.StoreId is { } requestedStore)
+            await storeAccess.EnsureCanAccessStoreAsync(requestedStore, ct);
         var q = db.Sales.AsNoTracking()
+            .Where(s => allowedStoreIds.Contains(s.StoreId))
             .Include(s => s.Lines)
             .Include(s => s.Payments)
             .Include(s => s.Register!).ThenInclude(r => r.Store)
@@ -1234,13 +1312,14 @@ public sealed class PosService(
 
     private async Task<Result> VoidSaleCoreAsync(VoidSaleDto dto, CancellationToken ct)
     {
+        EnsurePermission(Permissions.Sales.Void);
         if (dto.SaleId == Guid.Empty)
         {
             return Result.Failure("Sale is required.", "VALIDATION");
         }
 
         var reason = dto.Reason?.Trim();
-        if (string.IsNullOrWhiteSpace(reason) || reason.Length < 3)
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length < 3 || reason.Length > 500)
         {
             return Result.Failure("Void reason is required.", "VALIDATION");
         }
@@ -1284,6 +1363,12 @@ public sealed class PosService(
                 await tx.RollbackAsync(ct);
                 return Result.Failure("This sale already has return records and cannot be voided.", "RETURNED_SALE");
             }
+
+            await storeAccess.EnsureCanAccessStoreAsync(sale.StoreId, ct);
+            var approval = await ConsumeApprovalAsync(dto.ManagerApprovalId, ManagerApprovalType.VoidSale,
+                sale.StoreId, sale.TotalAmount, sale.SaleNumber, ct);
+            if (!approval.Succeeded)
+                return Result.Failure(approval.Error!, approval.ErrorCode!);
 
             var cashAmount = sale.Payments.Where(p => p.Method == PaymentMethod.Cash).Sum(p => p.Amount);
             Shift? openShift = null;
@@ -1351,11 +1436,9 @@ public sealed class PosService(
                     return Result.Failure("Customer not found for credit reversal.", "NOT_FOUND");
                 }
 
+                if (customer.Balance < creditAmount)
+                    return Result.Failure("This credit sale has repayments. Use the return/refund flow to settle the paid amount.", "CREDIT_SETTLED");
                 customer.Balance -= creditAmount;
-                if (customer.Balance < 0)
-                {
-                    customer.Balance = 0;
-                }
 
                 db.CustomerLedgers.Add(new CustomerLedger
                 {
@@ -1387,8 +1470,8 @@ public sealed class PosService(
         string reason,
         CancellationToken ct)
     {
-        var stock = await db.Stocks
-            .FirstOrDefaultAsync(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId, ct);
+        var stock = db.Stocks.Local.FirstOrDefault(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId)
+            ?? await db.Stocks.FirstOrDefaultAsync(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId, ct);
 
         if (stock is null)
         {
@@ -1430,6 +1513,7 @@ public sealed class PosService(
 
     private async Task<SaleForReturnDto?> GetSaleForReturnCoreAsync(Guid saleId, CancellationToken ct)
     {
+        EnsurePermission(Permissions.Sales.Refund);
         var sale = await db.Sales.AsNoTracking()
             .Include(s => s.Lines)
             .Include(s => s.Payments)
@@ -1440,13 +1524,15 @@ public sealed class PosService(
             return null;
         }
 
-        var returnedQty = await (
-            from rl in db.SaleReturnLines.AsNoTracking()
-            join sr in db.SaleReturns.AsNoTracking() on rl.SaleReturnId equals sr.Id
-            where sr.OriginalSaleId == saleId && sr.Status == SaleReturnStatus.Completed
-            group rl by rl.OriginalSaleLineId into g
-            select new { SaleLineId = g.Key, Qty = g.Sum(x => x.QuantityReturned) })
-            .ToDictionaryAsync(x => x.SaleLineId, x => x.Qty, ct);
+        await storeAccess.EnsureCanAccessStoreAsync(sale.StoreId, ct);
+
+        var previousLines = await db.SaleReturnLines.AsNoTracking()
+            .Where(line => line.SaleReturn != null && line.SaleReturn.OriginalSaleId == saleId &&
+                line.SaleReturn.Status == SaleReturnStatus.Completed).ToListAsync(ct);
+        var returnedQty = previousLines.GroupBy(line => line.OriginalSaleLineId)
+            .ToDictionary(group => group.Key, group => group.Sum(line => line.QuantityReturned));
+
+        var refundableLines = SaleFinancials.GetRefundableLines(sale);
 
         var originalPaymentMethods = FormatPaymentMethods(sale.Payments);
 
@@ -1465,12 +1551,16 @@ public sealed class PosService(
                 return new SaleReturnLineOptionDto
                 {
                     SaleLineId = l.Id,
+                    RefundableAmount = refundableLines[l.Id].Total,
+                    RefundableTax = refundableLines[l.Id].Tax,
+                    RefundedAmount = previousLines.Where(line => line.OriginalSaleLineId == l.Id).Sum(line => line.LineTotal),
+                    RefundedTax = previousLines.Where(line => line.OriginalSaleLineId == l.Id).Sum(line => line.TaxAmount),
                     Sku = l.Sku,
                     ProductName = l.ProductName,
                     QuantitySold = l.Quantity,
                     QuantityAlreadyReturned = already,
                     UnitPrice = l.UnitPrice,
-                    DiscountedUnitPrice = GetDiscountedUnitPrice(l),
+                    DiscountedUnitPrice = refundableLines[l.Id].UnitPrice,
                     TaxRate = l.TaxRate,
                     LineTotal = l.LineTotal
                 };
@@ -1491,114 +1581,92 @@ public sealed class PosService(
 
     private async Task<Result<SaleReturnReceiptDto>> ProcessReturnCoreAsync(ProcessReturnDto dto, CancellationToken ct)
     {
-        if (dto.Lines.Count == 0)
-        {
-            return Result<SaleReturnReceiptDto>.Failure("Select at least one line to return.", "EMPTY");
-        }
-
-        if (!Enum.TryParse<SaleReturnType>(dto.ReturnType, true, out var returnType))
-        {
-            return Result<SaleReturnReceiptDto>.Failure("Invalid return type.", "VALIDATION");
-        }
-
-        if (!Enum.TryParse<PaymentMethod>(dto.RefundMethod, true, out var refundMethod))
-        {
-            return Result<SaleReturnReceiptDto>.Failure("Invalid refund method.", "VALIDATION");
-        }
-
-        var returnReason = dto.ReturnReason?.Trim();
-        if (string.IsNullOrWhiteSpace(returnReason) || returnReason.Length < 3)
-        {
-            return Result<SaleReturnReceiptDto>.Failure("Return reason is required.", "VALIDATION");
-        }
-
+        EnsurePermission(Permissions.Sales.Refund);
+        if (dto.Lines is null || dto.Lines.Count == 0 || dto.Lines.Count > 500)
+            return Result<SaleReturnReceiptDto>.Failure("Select between one and 500 lines to return.", "EMPTY");
+        if (dto.Lines.Any(line => line is null) || SaleFinancials.HasDuplicateReturnLines(dto.Lines.Select(line => line.SaleLineId)))
+            return Result<SaleReturnReceiptDto>.Failure("Each sale line can appear only once in a return.", "DUPLICATE_RETURN_LINE");
+        if (!Enum.TryParse<SaleReturnType>(dto.ReturnType, true, out var returnType) || !Enum.IsDefined(returnType) ||
+            !Enum.TryParse<PaymentMethod>(dto.RefundMethod, true, out var refundMethod) || !Enum.IsDefined(refundMethod))
+            return Result<SaleReturnReceiptDto>.Failure("Invalid return type or refund method.", "VALIDATION");
+        var reason = dto.ReturnReason?.Trim();
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length < 3 || reason.Length > 300)
+            return Result<SaleReturnReceiptDto>.Failure("Enter a return reason between three and 300 characters.", "VALIDATION");
         if (returnType == SaleReturnType.Exchange && refundMethod == PaymentMethod.Cash)
-        {
-            return Result<SaleReturnReceiptDto>.Failure(
-                "For exchange, use Card/Other/Credit reference instead of cash refund.", "VALIDATION");
-        }
+            return Result<SaleReturnReceiptDto>.Failure("Use Card, Other, or Credit for an exchange.", "VALIDATION");
 
-        var sale = await db.Sales.AsNoTracking()
-            .Include(s => s.Lines)
-            .Include(s => s.Payments)
-            .Include(s => s.Register)
-            .FirstOrDefaultAsync(s => s.Id == dto.SaleId, ct);
-
-        if (sale is null || sale.Status is SaleStatus.Voided or SaleStatus.FullyReturned)
-        {
-            return Result<SaleReturnReceiptDto>.Failure("Sale not found or cannot be returned.", "NOT_FOUND");
-        }
-
-        var returnedQty = await (
-            from rl in db.SaleReturnLines.AsNoTracking()
-            join sr in db.SaleReturns.AsNoTracking() on rl.SaleReturnId equals sr.Id
-            where sr.OriginalSaleId == sale.Id && sr.Status == SaleReturnStatus.Completed
-            group rl by rl.OriginalSaleLineId into g
-            select new { SaleLineId = g.Key, Qty = g.Sum(x => x.QuantityReturned) })
-            .ToDictionaryAsync(x => x.SaleLineId, x => x.Qty, ct);
-
-        var lineMap = sale.Lines.ToDictionary(l => l.Id);
-        var returnLines = new List<(SaleLine Original, decimal Qty, string Disposition, string? LineReason, bool Restock, decimal Subtotal, decimal Tax, decimal Total)>();
-
-        foreach (var input in dto.Lines)
-        {
-            if (!lineMap.TryGetValue(input.SaleLineId, out var original))
-            {
-                return Result<SaleReturnReceiptDto>.Failure("Invalid sale line.", "VALIDATION");
-            }
-
-            var already = returnedQty.GetValueOrDefault(original.Id, 0m);
-            var returnable = original.Quantity - already;
-            if (input.QuantityReturned <= 0 || input.QuantityReturned > returnable)
-            {
-                return Result<SaleReturnReceiptDto>.Failure(
-                    $"Invalid return quantity for {original.Sku}. Returnable: {returnable:0.###}.", "VALIDATION");
-            }
-
-            var disposition = NormalizeReturnDisposition(input.Disposition);
-            if (disposition is null)
-            {
-                return Result<SaleReturnReceiptDto>.Failure("Invalid return disposition. Use Restock, Damaged, or Discard.", "VALIDATION");
-            }
-
-            var discountedUnitPrice = GetDiscountedUnitPrice(original);
-            var subtotal = Math.Round(input.QuantityReturned * discountedUnitPrice, 2);
-            var tax = Math.Round(subtotal * original.TaxRate / 100m, 2);
-            var restock = disposition == "Restock";
-            returnLines.Add((original, input.QuantityReturned, disposition, input.LineReason?.Trim(), restock, subtotal, tax, subtotal + tax));
-        }
-
-        var subtotalTotal = returnLines.Sum(l => l.Subtotal);
-        var taxTotal = returnLines.Sum(l => l.Tax);
-        var totalRefund = subtotalTotal + taxTotal;
-
-        Shift? shift = null;
-        if (refundMethod == PaymentMethod.Cash && sale.Register?.HasCashDrawer == true)
-        {
-            shift = await db.Shifts.FirstOrDefaultAsync(
-                s => s.RegisterId == sale.RegisterId && s.Status == ShiftStatus.Open, ct);
-            if (shift is null)
-            {
-                return Result<SaleReturnReceiptDto>.Failure(
-                    "Open a shift on this register before issuing a cash refund.", "NO_SHIFT");
-            }
-        }
-
-        var now = clock.UtcNow;
-        var originalPayment = sale.Payments.FirstOrDefault()?.Method ?? PaymentMethod.Cash;
         var strategy = db.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
             await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+            var sale = await db.Sales.Include(s => s.Lines).Include(s => s.Payments).Include(s => s.Register)
+                .FirstOrDefaultAsync(s => s.Id == dto.SaleId, ct);
+            if (sale is null || sale.Status is SaleStatus.Voided or SaleStatus.FullyReturned)
+                return Result<SaleReturnReceiptDto>.Failure("Sale not found or cannot be returned.", "NOT_FOUND");
+            await storeAccess.EnsureCanAccessStoreAsync(sale.StoreId, ct);
 
+            var previousReturns = await db.SaleReturns.AsNoTracking().Include(r => r.Lines)
+                .Where(r => r.OriginalSaleId == sale.Id && r.Status == SaleReturnStatus.Completed).ToListAsync(ct);
+            var previousLines = previousReturns.SelectMany(r => r.Lines).ToList();
+            var allocations = SaleFinancials.GetRefundableLines(sale);
+            var originals = sale.Lines.ToDictionary(line => line.Id);
+            var lines = new List<(SaleLine Original, decimal Quantity, string Disposition, string? Reason, RefundAmounts Amounts)>();
+            foreach (var input in dto.Lines)
+            {
+                if (!originals.TryGetValue(input.SaleLineId, out var original))
+                    return Result<SaleReturnReceiptDto>.Failure("Invalid sale line.", "VALIDATION");
+                var returned = previousLines.Where(line => line.OriginalSaleLineId == original.Id).ToList();
+                var already = returned.Sum(line => line.QuantityReturned);
+                if (input.QuantityReturned <= 0 || Math.Round(input.QuantityReturned, 3) != input.QuantityReturned ||
+                    input.QuantityReturned > original.Quantity - already)
+                    return Result<SaleReturnReceiptDto>.Failure($"Invalid return quantity for {original.Sku}. Returnable: {original.Quantity - already:0.###}.", "VALIDATION");
+                var disposition = NormalizeReturnDisposition(input.Disposition);
+                if (disposition is null)
+                    return Result<SaleReturnReceiptDto>.Failure("Use Restock, Damaged, or Discard for the return disposition.", "VALIDATION");
+                var amounts = SaleFinancials.CalculateRefund(allocations[original.Id], already,
+                    returned.Sum(line => line.LineTotal), returned.Sum(line => line.TaxAmount), input.QuantityReturned);
+                lines.Add((original, input.QuantityReturned, disposition, input.LineReason?.Trim(), amounts));
+            }
+
+            var total = lines.Sum(line => line.Amounts.Total);
+            if (total > Math.Max(0m, sale.TotalAmount - previousReturns.Sum(r => r.TotalAmount)))
+                return Result<SaleReturnReceiptDto>.Failure("The refund exceeds the remaining paid value of this sale.", "REFUND_LIMIT");
+
+            var originalCredit = sale.Payments.Where(payment => payment.Method == PaymentMethod.Credit).Sum(payment => payment.Amount);
+            decimal creditReduction = 0;
+            Customer? customer = null;
+            if (originalCredit > 0 && sale.CustomerId is { } customerId)
+            {
+                customer = await db.Customers.FirstOrDefaultAsync(c => c.Id == customerId, ct);
+                if (customer is null)
+                    return Result<SaleReturnReceiptDto>.Failure("Customer not found for credit settlement.", "NOT_FOUND");
+                var references = previousReturns.Select(r => r.ReturnNumber).ToList();
+                var creditEntries = await db.CustomerLedgers.AsNoTracking()
+                    .Where(entry => entry.CustomerId == customerId && entry.EntryType == CustomerLedgerEntryType.Refund &&
+                        entry.Reference != null && references.Contains(entry.Reference)).ToListAsync(ct);
+                var reversedCredit = -creditEntries.Sum(entry => entry.Amount);
+                creditReduction = Math.Min(total, Math.Min(Math.Max(0m, customer.Balance), Math.Max(0m, originalCredit - reversedCredit)));
+            }
+            var settlementAmount = total - creditReduction;
+            if (refundMethod == PaymentMethod.Credit && settlementAmount > 0)
+                return Result<SaleReturnReceiptDto>.Failure("Only unpaid customer credit can be reversed as Credit. Choose Cash, Card, or Other for the paid amount.", "INVALID_CREDIT_REFUND");
+
+            Shift? shift = null;
+            if (refundMethod == PaymentMethod.Cash && settlementAmount > 0 && sale.Register?.HasCashDrawer == true)
+            {
+                shift = await db.Shifts.FirstOrDefaultAsync(s => s.RegisterId == sale.RegisterId && s.Status == ShiftStatus.Open, ct);
+                if (shift is null)
+                    return Result<SaleReturnReceiptDto>.Failure("Open a shift before issuing a cash refund.", "NO_SHIFT");
+            }
+
+            var now = clock.UtcNow;
             var store = await db.Stores.AsNoTracking().FirstAsync(s => s.Id == sale.StoreId, ct);
-            var returnNumber = await GenerateReturnNumberAsync(store.Code, store.TenantId, sale.StoreId, now, ct);
-
-            var saleReturn = new SaleReturn
+            var number = await GenerateReturnNumberAsync(store.Code, store.TenantId, sale.StoreId, now, ct);
+            var entity = new SaleReturn
             {
                 StoreId = sale.StoreId,
-                ReturnNumber = returnNumber,
+                ReturnNumber = number,
                 OriginalSaleId = sale.Id,
                 RegisterId = sale.RegisterId,
                 ShiftId = shift?.Id,
@@ -1607,126 +1675,98 @@ public sealed class PosService(
                 Status = SaleReturnStatus.Completed,
                 CustomerId = sale.CustomerId,
                 CustomerName = sale.CustomerName,
-                Subtotal = subtotalTotal,
-                TaxAmount = taxTotal,
-                TotalAmount = totalRefund,
-                RefundMethod = refundMethod,
-                ReturnReason = returnReason,
+                Subtotal = lines.Sum(line => line.Amounts.Subtotal),
+                TaxAmount = lines.Sum(line => line.Amounts.Tax),
+                TotalAmount = total,
+                RefundMethod = settlementAmount == 0 && creditReduction > 0 ? PaymentMethod.Credit : refundMethod,
+                ReturnReason = reason,
                 RefundReference = dto.RefundReference?.Trim(),
                 ExchangeReference = dto.ExchangeReference?.Trim(),
                 Notes = dto.Notes?.Trim(),
                 ProcessedOn = now
             };
-
-            db.SaleReturns.Add(saleReturn);
-
-            var lineNumber = 1;
-            foreach (var (original, qty, disposition, lineReason, restock, lineSub, lineTax, lineTotal) in returnLines)
+            db.SaleReturns.Add(entity);
+            var index = 1;
+            foreach (var line in lines)
             {
-                if (restock)
+                if (line.Disposition == "Restock")
                 {
-                    var stockResult = await RestockAsync(
-                        sale.StoreId, original.ProductId, original.ProductVariantId,
-                        qty, returnNumber, ct);
-                    if (!stockResult.Succeeded)
-                    {
-                        await tx.RollbackAsync(ct);
-                        return Result<SaleReturnReceiptDto>.Failure(stockResult.Error!, stockResult.ErrorCode!);
-                    }
+                    var restock = await RestockAsync(sale.StoreId, line.Original.ProductId,
+                        line.Original.ProductVariantId, line.Quantity, number, ct);
+                    if (!restock.Succeeded)
+                        return Result<SaleReturnReceiptDto>.Failure(restock.Error!, restock.ErrorCode!);
                 }
-
                 db.SaleReturnLines.Add(new SaleReturnLine
                 {
-                    SaleReturnId = saleReturn.Id,
-                    OriginalSaleLineId = original.Id,
-                    LineNumber = lineNumber++,
-                    ProductId = original.ProductId,
-                    ProductVariantId = original.ProductVariantId,
-                    Sku = original.Sku,
-                    ProductName = original.ProductName,
-                    QuantityReturned = qty,
-                    UnitPrice = GetDiscountedUnitPrice(original),
-                    TaxRate = original.TaxRate,
-                    TaxAmount = lineTax,
-                    LineTotal = lineTotal,
-                    Restock = restock,
-                    Disposition = disposition,
-                    LineReason = lineReason
+                    SaleReturnId = entity.Id,
+                    OriginalSaleLineId = line.Original.Id,
+                    LineNumber = index++,
+                    ProductId = line.Original.ProductId,
+                    ProductVariantId = line.Original.ProductVariantId,
+                    Sku = line.Original.Sku,
+                    ProductName = line.Original.ProductName,
+                    QuantityReturned = line.Quantity,
+                    UnitPrice = allocations[line.Original.Id].UnitPrice,
+                    TaxRate = line.Original.TaxRate,
+                    TaxAmount = line.Amounts.Tax,
+                    LineTotal = line.Amounts.Total,
+                    Restock = line.Disposition == "Restock",
+                    Disposition = line.Disposition,
+                    LineReason = line.Reason
                 });
             }
-
-            if (sale.CustomerId is { } customerId && originalPayment == PaymentMethod.Credit)
+            if (creditReduction > 0 && customer is not null)
             {
-                var customer = await db.Customers.FirstOrDefaultAsync(c => c.Id == customerId, ct);
-                if (customer is null)
-                {
-                    await tx.RollbackAsync(ct);
-                    return Result<SaleReturnReceiptDto>.Failure("Customer not found.", "NOT_FOUND");
-                }
-
-                customer.Balance -= totalRefund;
-                if (customer.Balance < 0)
-                {
-                    customer.Balance = 0;
-                }
-
+                customer.Balance -= creditReduction;
                 db.CustomerLedgers.Add(new CustomerLedger
                 {
                     CustomerId = customer.Id,
                     EntryType = CustomerLedgerEntryType.Refund,
-                    Amount = -totalRefund,
+                    Amount = -creditReduction,
                     BalanceAfter = customer.Balance,
-                    Reference = returnNumber,
-                    Notes = BuildReturnLedgerNote(returnReason, dto.Notes),
+                    Reference = number,
+                    Notes = BuildReturnLedgerNote(reason, dto.Notes),
                     EntryDate = now
                 });
             }
-
-            if (refundMethod == PaymentMethod.Cash && shift is not null)
+            if (refundMethod == PaymentMethod.Cash && settlementAmount > 0 && shift is not null)
             {
-                var cashResult = await CashLedgerHelper.PostMovementAsync(
-                    db, shift.Id, sale.StoreId, CashMovementType.Refund,
-                    -totalRefund, returnNumber, BuildReturnLedgerNote(returnReason, dto.Notes), null, saleReturn.Id, now, ct);
-                if (!cashResult.Succeeded)
-                {
-                    await tx.RollbackAsync(ct);
-                    return Result<SaleReturnReceiptDto>.Failure(cashResult.Error!, cashResult.ErrorCode!);
-                }
+                var movement = await CashLedgerHelper.PostMovementAsync(db, shift.Id, sale.StoreId,
+                    CashMovementType.Refund, -settlementAmount, number, BuildReturnLedgerNote(reason, dto.Notes), null, entity.Id, now, ct);
+                if (!movement.Succeeded)
+                    return Result<SaleReturnReceiptDto>.Failure(movement.Error!, movement.ErrorCode!);
             }
-
-            var saleEntity = await db.Sales.Include(s => s.Lines).FirstAsync(s => s.Id == sale.Id, ct);
-            var allReturned = saleEntity.Lines.All(l =>
-            {
-                var ret = returnedQty.GetValueOrDefault(l.Id, 0m)
-                    + returnLines.Where(r => r.Original.Id == l.Id).Sum(r => r.Qty);
-                return ret >= l.Quantity;
-            });
-
-            saleEntity.Status = allReturned ? SaleStatus.FullyReturned : SaleStatus.PartiallyReturned;
-
+            sale.Status = sale.Lines.All(original =>
+                previousLines.Where(line => line.OriginalSaleLineId == original.Id).Sum(line => line.QuantityReturned) +
+                lines.Where(line => line.Original.Id == original.Id).Sum(line => line.Quantity) >= original.Quantity)
+                ? SaleStatus.FullyReturned : SaleStatus.PartiallyReturned;
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
-
             return Result<SaleReturnReceiptDto>.Success(new SaleReturnReceiptDto
             {
-                ReturnId = saleReturn.Id,
-                ReturnNumber = returnNumber,
+                ReturnId = entity.Id,
+                ReturnNumber = number,
                 OriginalSaleNumber = sale.SaleNumber,
+                CreditReversedAmount = creditReduction,
+                SettlementAmount = settlementAmount,
+                ReturnReason = reason,
+                RefundReference = entity.RefundReference,
+                ExchangeReference = entity.ExchangeReference,
                 ReturnType = returnType.ToString(),
-                RefundMethod = refundMethod.ToString(),
+                RefundMethod = entity.RefundMethod.ToString(),
                 CustomerName = sale.CustomerName,
-                Subtotal = subtotalTotal,
-                TaxAmount = taxTotal,
-                TotalAmount = totalRefund,
+                Subtotal = entity.Subtotal,
+                TaxAmount = entity.TaxAmount,
+                TotalAmount = total,
                 ProcessedOn = now,
-                Lines = returnLines.Select(r => new SaleReturnReceiptLineDto
+                Lines = lines.Select(line => new SaleReturnReceiptLineDto
                 {
-                    Sku = r.Original.Sku,
-                    ProductName = r.Original.ProductName,
-                    QuantityReturned = r.Qty,
-                    LineTotal = r.Total,
-                    Disposition = r.Disposition,
-                    LineReason = r.LineReason
+                    Sku = line.Original.Sku,
+                    ProductName = line.Original.ProductName,
+                    QuantityReturned = line.Quantity,
+                    LineTotal = line.Amounts.Total,
+                    Disposition = line.Disposition,
+                    LineReason = line.Reason
                 }).ToList()
             });
         });
@@ -1764,8 +1804,8 @@ public sealed class PosService(
         string reference,
         CancellationToken ct)
     {
-        var stock = await db.Stocks
-            .FirstOrDefaultAsync(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId, ct);
+        var stock = db.Stocks.Local.FirstOrDefault(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId)
+            ?? await db.Stocks.FirstOrDefaultAsync(s => s.StoreId == storeId && s.ProductId == productId && s.ProductVariantId == variantId, ct);
 
         if (stock is null)
         {
@@ -1802,4 +1842,109 @@ public sealed class PosService(
 
     private static string NormalizeCode(string? code) =>
         string.IsNullOrWhiteSpace(code) ? "NA" : code.Trim().ToUpperInvariant().Replace(" ", "");
+    private void EnsurePermission(params string[] permissions)
+    {
+        if (!currentUser.IsAuthenticated || !permissions.Any(permission =>
+                userContext.Principal?.HasClaim(Permissions.ClaimType, permission) == true))
+            throw new UnauthorizedAccessException("You do not have permission to perform this action.");
+    }
+
+    private async Task<Result<IList<PosCartLineDto>>> ResolveCheckoutLinesAsync(
+        Guid storeId, IList<PosCartLineDto> inputs, CancellationToken ct)
+    {
+        if (inputs.Any(line => line is null || line.ProductId == Guid.Empty || line.Quantity <= 0 ||
+                line.Quantity > 999999999m || Math.Round(line.Quantity, 3) != line.Quantity))
+            return Result<IList<PosCartLineDto>>.Failure("Cart quantities must be positive and use at most three decimal places.", "INVALID_QUANTITY");
+
+        var ids = inputs.Select(line => line.ProductId).Distinct().ToList();
+        var products = await db.Products.AsNoTracking().Include(p => p.TaxCategory)
+            .Where(p => ids.Contains(p.Id) && p.IsActive &&
+                p.StoreAssignments.Any(a => a.StoreId == storeId && a.IsVisibleOnPos))
+            .ToDictionaryAsync(p => p.Id, ct);
+        var variantIds = inputs.Where(line => line.VariantId != null).Select(line => line.VariantId!.Value).Distinct().ToList();
+        var variants = await db.ProductVariants.AsNoTracking()
+            .Where(v => variantIds.Contains(v.Id) && v.IsActive).ToDictionaryAsync(v => v.Id, ct);
+        var prices = await db.ProductPrices.AsNoTracking()
+            .Where(price => price.StoreId == storeId && ids.Contains(price.ProductId))
+            .ToDictionaryAsync(price => price.ProductId, price => price.Price, ct);
+        var result = new List<PosCartLineDto>();
+        foreach (var input in inputs)
+        {
+            if (!products.TryGetValue(input.ProductId, out var product))
+                return Result<IList<PosCartLineDto>>.Failure("A cart product is inactive or is not assigned to this store. Refresh the cart.", "PRODUCT_UNAVAILABLE");
+
+            ProductVariant? variant = null;
+            if (input.VariantId is { } variantId &&
+                (!variants.TryGetValue(variantId, out variant) || variant.ProductId != product.Id))
+                return Result<IList<PosCartLineDto>>.Failure("A cart variant is invalid or inactive. Refresh the cart.", "INVALID_VARIANT");
+
+            var price = Math.Round(variant?.SellPrice ?? prices.GetValueOrDefault(product.Id, product.SellPrice), 2);
+            var taxRate = product.TaxCategory?.Rate ?? 0m;
+            if (price < 0 || taxRate < 0 || taxRate > 100)
+                return Result<IList<PosCartLineDto>>.Failure("Correct the product price or tax configuration before selling this item.", "INVALID_CATALOG");
+            if (Math.Round(input.UnitPrice, 2) != price || input.UnitPrice < 0 || input.TaxRate != taxRate)
+                return Result<IList<PosCartLineDto>>.Failure($"The price or tax for {product.Sku} changed. Remove the item and add it again.", "PRICE_CHANGED");
+
+            result.Add(new PosCartLineDto
+            {
+                ProductId = product.Id,
+                VariantId = variant?.Id,
+                Sku = variant?.Sku ?? product.Sku,
+                Name = variant is null ? product.Name : $"{product.Name} · {variant.Name}",
+                Quantity = input.Quantity,
+                UnitPrice = price,
+                TaxRate = taxRate,
+                DiscountAmount = input.DiscountAmount,
+                DiscountReason = input.DiscountReason?.Trim(),
+                ManagerApprovalId = input.ManagerApprovalId
+            });
+        }
+        return Result<IList<PosCartLineDto>>.Success(result);
+    }
+
+    private async Task<Result<string>> ValidateDiscountApprovalsAsync(PosCheckoutDto checkout, CancellationToken ct)
+    {
+        if (!security.Value.RequireDiscountManagerApproval)
+            return Result<string>.Success(string.Empty);
+
+        var approvedBy = string.Empty;
+        foreach (var line in checkout.Lines.Where(line => line.DiscountAmount > 0))
+        {
+            var approval = await ConsumeApprovalAsync(line.ManagerApprovalId, ManagerApprovalType.Discount,
+                checkout.StoreId, line.LineDiscount, line.Sku, ct);
+            if (!approval.Succeeded)
+                return approval;
+            approvedBy = approval.Data ?? approvedBy;
+        }
+        if (checkout.InvoiceDiscountAmount > 0)
+        {
+            var approval = await ConsumeApprovalAsync(checkout.ManagerApprovalId, ManagerApprovalType.Discount,
+                checkout.StoreId, Math.Round(checkout.InvoiceDiscountAmount, 2), "Invoice discount", ct);
+            if (!approval.Succeeded)
+                return approval;
+            approvedBy = approval.Data ?? approvedBy;
+        }
+        return Result<string>.Success(approvedBy);
+    }
+
+    private async Task<Result<string>> ConsumeApprovalAsync(Guid? approvalId, ManagerApprovalType type,
+        Guid storeId, decimal amount, string reference, CancellationToken ct)
+    {
+        if (approvalId is null || approvalId == Guid.Empty)
+            return Result<string>.Failure("Manager approval is required for this action.", "APPROVAL_REQUIRED");
+        var approval = await db.Set<ManagerApprovalLog>().FirstOrDefaultAsync(log => log.Id == approvalId, ct);
+        var now = clock.UtcNow;
+        var expiry = Math.Clamp(security.Value.ApprovalExpiryMinutes, 1, 60);
+        if (approval is null || approval.Status != ManagerApprovalStatus.Approved || approval.ApprovalType != type ||
+            approval.RequestedByUserId != currentUser.UserId || approval.StoreId != storeId ||
+            approval.ApprovedOn > now || approval.ApprovedOn < now.AddMinutes(-expiry) ||
+            approval.Amount != Math.Round(amount, 2) || !string.Equals(approval.Reference, reference, StringComparison.Ordinal))
+            return Result<string>.Failure("Approval is invalid, expired, already used, or belongs to a different action. Request approval again.", "INVALID_APPROVAL");
+
+        if (!await db.Users.AnyAsync(user => user.Id == approval.ApprovedByUserId && user.TenantId == approval.TenantId && user.IsActive, ct))
+            return Result<string>.Failure("The approving manager is no longer active.", "INVALID_APPROVAL");
+        approval.Status = ManagerApprovalStatus.Consumed;
+        approval.Notes = AppendAuditNote(approval.Notes, $"Used on {now:u} by {currentUser.UserId}.");
+        return Result<string>.Success(approval.ApprovedByUserId);
+    }
 }

@@ -82,7 +82,8 @@
         </RadzenAlert>
     }
 
-    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End" Wrap="FlexWrap.Wrap">
+        <PosPaymentCustomer CustomerId="@CustomerId" CustomerName="@CustomerName" CustomerChanged="@CustomerChanged" />
         <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@Cancel" />
         <RadzenButton Text="Complete sale" Icon="check" ButtonStyle="ButtonStyle.Primary"
                       Disabled="@(!CanComplete)" Click="@Confirm" />
@@ -121,6 +122,9 @@
 
 @code {
     [Parameter] public decimal Total { get; set; }
+    [Parameter] public Guid? CustomerId { get; set; }
+    [Parameter] public string CustomerName { get; set; } = "Walk-In Customer";
+    [Parameter] public EventCallback<PosCustomerSelectionDto> CustomerChanged { get; set; }
 
     private readonly string[] _methods = ["Cash", "Card", "Other", "Credit"];
     private readonly List<PaymentLineEditor> _lines = [];

@@ -12,6 +12,10 @@ public class Customer : AuditableEntity
     public string Name { get; set; } = string.Empty;
     public string? Phone { get; set; }
     public string? Email { get; set; }
+    public string? NormalizedPhone { get; set; }
+    public string? WhatsAppNumber { get; set; }
+    public DateTime? DateOfBirth { get; set; }
+    public bool BirthdayEmailOptIn { get; set; }
     public string? AddressLine { get; set; }
     public string? City { get; set; }
 

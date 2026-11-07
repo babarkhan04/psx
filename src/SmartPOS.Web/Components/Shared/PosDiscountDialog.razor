@@ -1,4 +1,5 @@
 @inject DialogService DialogService
+@inject Microsoft.Extensions.Options.IOptions<SmartPOS.Application.Common.Options.PosSecurityOptions> Security
 
 <RadzenStack Gap="1rem" class="pos-discount-dialog">
     <div>
@@ -23,7 +24,7 @@
         </RadzenStack>
     }
 
-    <RadzenTextBox @bind-Value="_reason" Placeholder="Discount reason, e.g. promotion, damaged box, manager approval" Style="width:100%" />
+    <RadzenTextBox @bind-Value="_reason" Placeholder="Discount reason, e.g. promotion or damaged packaging" Style="width:100%" />
 
     @if (!string.IsNullOrWhiteSpace(_validation))
     {
@@ -107,15 +108,16 @@
             return;
         }
 
-        if (amount > 0 && string.IsNullOrWhiteSpace(_reason))
+        if (amount > 0 && ((_reason?.Trim().Length ?? 0) < 3 || (_reason?.Trim().Length ?? 0) > 300))
         {
-            _validation = "Please enter a reason for this discount.";
+            _validation = "Please enter a discount reason between three and 300 characters.";
             return;
         }
 
         var finalReason = string.IsNullOrWhiteSpace(_reason) ? null : _reason.Trim();
 
-        if (RequireManagerApproval && amount > ManagerApprovalThreshold)
+        Guid? approvalId = null;
+        if (Security.Value.RequireDiscountManagerApproval && RequireManagerApproval && amount > ManagerApprovalThreshold)
         {
             var approval = await DialogService.OpenAsync<ManagerApprovalDialog>(
                 "Manager approval",
@@ -135,15 +137,15 @@
                 return;
             }
 
-            finalReason = string.IsNullOrWhiteSpace(finalReason)
-                ? $"Approved by {approved.ApprovedByName}"
-                : $"{finalReason} | Approved by {approved.ApprovedByName}";
+            approvalId = approved.ApprovalId;
+
         }
 
         DialogService.Close(new PosDiscountResultDto
         {
             Amount = Math.Round(amount, 2),
-            Reason = finalReason
+            Reason = finalReason,
+            ManagerApprovalId = approvalId
         });
     }
 

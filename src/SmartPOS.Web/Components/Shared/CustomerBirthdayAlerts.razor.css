@@ -1,0 +1,5 @@
+.birthday-panel { background: var(--sp-surface); border: 1px solid var(--sp-border); border-radius: 12px; padding: 1rem; margin-bottom: 1.25rem; min-width: 0; }
+.birthday-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .75rem; }
+.birthday-heading h3 { display: flex; align-items: center; gap: .5rem; margin: 0; font-size: 1rem; }
+.birthday-heading h3 ::deep .rzi { color: #a8498a; }
+.birthday-heading p, .birthday-note { font-size: .78rem; color: var(--sp-text-muted); line-height: 1.6; margin: .4rem 0; }

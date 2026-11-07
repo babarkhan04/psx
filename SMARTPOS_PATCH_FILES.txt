@@ -1,0 +1,37 @@
+SmartPOS replacement and new source files
+Based on smartpos_code_20261023_214326.zip
+
+src/SmartPOS.Application/Common/Options/PosSecurityOptions.cs
+src/SmartPOS.Application/Sales/SaleFinancials.cs
+src/SmartPOS.Domain/Enums/ManagerApprovalStatus.cs
+src/SmartPOS.Infrastructure/Data/DatabaseInitializer.cs
+src/SmartPOS.Infrastructure/DependencyInjection.cs
+src/SmartPOS.Infrastructure/ExceptionHandling/GlobalExceptionHandler.cs
+src/SmartPOS.Infrastructure/Persistence/DbContextGate.cs
+src/SmartPOS.Infrastructure/Services/Management/CashLedgerHelper.cs
+src/SmartPOS.Infrastructure/Services/Management/CustomerService.cs
+src/SmartPOS.Infrastructure/Services/Management/DashboardService.cs
+src/SmartPOS.Infrastructure/Services/Management/InventoryService.cs
+src/SmartPOS.Infrastructure/Services/Management/ManagerApprovalService.cs
+src/SmartPOS.Infrastructure/Services/Management/PosService.cs
+src/SmartPOS.Infrastructure/Services/Management/ProductService.cs
+src/SmartPOS.Infrastructure/Services/Management/PurchaseService.cs
+src/SmartPOS.Infrastructure/Services/Management/ReportService.cs
+src/SmartPOS.Infrastructure/Services/Management/ShiftService.cs
+src/SmartPOS.Infrastructure/Services/StoreAccessService.cs
+src/SmartPOS.Infrastructure/SmartPOS.Infrastructure.csproj
+src/SmartPOS.Shared/Contracts/PosDtos.cs
+src/SmartPOS.Web/Components/Pages/Pos.razor
+src/SmartPOS.Web/Components/Shared/PosDiscountDialog.razor
+src/SmartPOS.Web/Components/Shared/SaleReturnDialog.razor
+src/SmartPOS.Web/Components/Shared/SaleReturnReceiptDialog.razor
+src/SmartPOS.Web/Components/Shared/VoidSaleDialog.razor
+src/SmartPOS.Web/Program.cs
+src/SmartPOS.Web/appsettings.Production.json
+src/SmartPOS.Web/appsettings.json
+tests/SmartPOS.Tests/PosRegressionTests.cs
+tests/SmartPOS.Tests/SaleFinancialsTests.cs
+tests/SmartPOS.Tests/SmartPOS.Tests.csproj
+tests/SmartPOS.Tests/UnitTest1.cs
+
+Documentation included: SMARTPOS_PATCH_README.md and this file.

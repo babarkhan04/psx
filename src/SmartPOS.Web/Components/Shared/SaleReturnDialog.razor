@@ -1,3 +1,4 @@
+@using SmartPOS.Application.Sales
 @inject IPosService PosService
 @inject DialogService DialogService
 
@@ -96,7 +97,7 @@
         <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem">
             <RadzenButton ButtonStyle="ButtonStyle.Light" Text="Cancel" Click="@(() => DialogService.Close(false))" />
             <RadzenButton Icon="undo" Text="Process return" ButtonStyle="ButtonStyle.Primary"
-                          IsBusy="@_saving" Disabled="@(_saving || RefundTotal <= 0)" Click="@SubmitAsync" />
+                          IsBusy="@_saving" Disabled="@(_saving || SelectedQuantity <= 0)" Click="@SubmitAsync" />
         </RadzenStack>
     }
 </RadzenStack>
@@ -119,17 +120,12 @@
     private static readonly string[] _refundMethods = ["Cash", "Card", "Other", "Credit"];
     private static readonly string[] _dispositions = ["Restock", "Damaged", "Discard"];
 
-    private decimal RefundTotal => _lines.Where(l => l.Quantity > 0).Sum(l =>
-    {
-        var sub = Math.Round(l.Quantity * l.DiscountedUnitPrice, 2);
-        return sub + Math.Round(sub * l.TaxRate / 100m, 2);
-    });
+    private decimal RefundTotal => _lines.Where(line => line.Quantity > 0).Sum(line => RefundFor(line, line.Quantity));
+    private decimal ReturnableTotal => _lines.Where(line => line.Returnable > 0).Sum(line => RefundFor(line, line.Returnable));
 
-    private decimal ReturnableTotal => _lines.Sum(l =>
-    {
-        var sub = Math.Round(l.Returnable * l.DiscountedUnitPrice, 2);
-        return sub + Math.Round(sub * l.TaxRate / 100m, 2);
-    });
+    private static decimal RefundFor(ReturnLineRow line, decimal quantity) => SaleFinancials.CalculateRefund(
+        new RefundableLine(line.SaleLineId, line.QuantitySold, line.RefundableAmount, line.RefundableTax),
+        line.QuantityAlreadyReturned, line.RefundedAmount, line.RefundedTax, Math.Min(quantity, line.Returnable)).Total;
 
     private decimal SelectedQuantity => _lines.Where(l => l.Quantity > 0).Sum(l => l.Quantity);
     private decimal RestockQuantity => _lines.Where(l => l.Quantity > 0 && l.Disposition == "Restock").Sum(l => l.Quantity);
@@ -147,12 +143,18 @@
             _lines = _sale.Lines.Select(l => new ReturnLineRow
             {
                 SaleLineId = l.SaleLineId,
+                QuantitySold = l.QuantitySold,
+                QuantityAlreadyReturned = l.QuantityAlreadyReturned,
+                RefundableAmount = l.RefundableAmount,
+                RefundableTax = l.RefundableTax,
+                RefundedAmount = l.RefundedAmount,
+                RefundedTax = l.RefundedTax,
                 Sku = l.Sku,
                 ProductName = l.ProductName,
                 Returnable = l.QuantityReturnable,
                 Quantity = l.QuantityReturnable,
                 UnitPrice = l.UnitPrice,
-                DiscountedUnitPrice = l.DiscountedUnitPrice <= 0 ? l.UnitPrice : l.DiscountedUnitPrice,
+                DiscountedUnitPrice = l.DiscountedUnitPrice,
                 TaxRate = l.TaxRate,
                 Disposition = "Restock"
             }).ToList();
@@ -230,6 +232,12 @@
 
     private sealed class ReturnLineRow
     {
+        public decimal QuantitySold { get; set; }
+        public decimal QuantityAlreadyReturned { get; set; }
+        public decimal RefundableAmount { get; set; }
+        public decimal RefundableTax { get; set; }
+        public decimal RefundedAmount { get; set; }
+        public decimal RefundedTax { get; set; }
         public Guid SaleLineId { get; set; }
         public string Sku { get; set; } = string.Empty;
         public string ProductName { get; set; } = string.Empty;

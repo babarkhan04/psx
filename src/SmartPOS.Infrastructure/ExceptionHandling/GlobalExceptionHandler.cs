@@ -21,8 +21,9 @@ public sealed class GlobalExceptionHandler(
         var correlationContext = scope.ServiceProvider.GetRequiredService<ICorrelationContext>();
 
         var smartPosException = exception as SmartPosException;
-        var statusCode = smartPosException?.StatusCode ?? StatusCodes.Status500InternalServerError;
-        var errorCode = smartPosException?.ErrorCode ?? "UNHANDLED";
+        var statusCode = smartPosException?.StatusCode ?? (exception is UnauthorizedAccessException
+            ? StatusCodes.Status403Forbidden : StatusCodes.Status500InternalServerError);
+        var errorCode = smartPosException?.ErrorCode ?? (exception is UnauthorizedAccessException ? "FORBIDDEN" : "UNHANDLED");
 
         await errorLogService.LogAsync(
             exception,

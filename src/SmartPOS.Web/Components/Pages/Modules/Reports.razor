@@ -4,70 +4,150 @@
 @inject IStoreService StoreService
 @inject IStoreContext StoreContext
 @inject DialogService DialogService
+@inject ILogger<Reports> Logger
 
-<PageTitle>Advanced Reports · SmartPOS</PageTitle>
+<PageTitle>Reports &amp; Analytics · SmartPOS</PageTitle>
 
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Advanced Reports &amp; Analytics</h1>
-        <p class="page-subtitle">Sales, profit, discounts, cash, inventory, transfers, customers, purchases, and tax insights.</p>
-    </div>
-    <div class="toolbar-actions">
-        <RadzenDropDown @bind-Value="_storeId" Data="@_storeOptions" TextProperty="Text" ValueProperty="Value"
-                        AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive"
-                        Change="@LoadAsync" Style="min-width:220px" />
-        <RadzenButton Text="Today" ButtonStyle="ButtonStyle.Light" Click="@(() => SetPresetAsync(0))" />
-        <RadzenButton Text="7d" ButtonStyle="ButtonStyle.Light" Click="@(() => SetPresetAsync(6))" />
-        <RadzenButton Text="30d" ButtonStyle="ButtonStyle.Light" Click="@(() => SetPresetAsync(29))" />
-        <RadzenDatePicker @bind-Value="_from" DateFormat="dd MMM yyyy" Change="@LoadAsync" Style="width:155px" ShowTime="false" />
-        <RadzenDatePicker @bind-Value="_to" DateFormat="dd MMM yyyy" Change="@LoadAsync" Style="width:155px" ShowTime="false" />
-        <RadzenButton Icon="refresh" Text="Refresh" ButtonStyle="ButtonStyle.Light" Click="@LoadAsync" />
-        <a href="@ExportUrl" class="rz-button rz-button-light report-export-button" style="text-decoration:none;display:inline-flex;align-items:center;gap:0.35rem">
-            <RadzenIcon Icon="download" /> Export Excel
-        </a>
-    </div>
-</div>
-
-@if (_loading)
-{
-    <div class="customer-ledger-loading"><RadzenProgressBarCircular ShowValue="false" Mode="ProgressBarMode.Indeterminate" /></div>
-}
-else if (_report is not null)
-{
-    <div class="kpi-grid">
-        <div class="kpi-card">
-            <div class="kpi-top"><span class="kpi-label">Net sales</span><span class="kpi-chip chip-sales"><RadzenIcon Icon="payments" /></span></div>
-            <div class="kpi-value">@Money0(_report.SalesSummary.NetSales)</div>
+<div class="reports-workspace">
+    <header class="reports-hero">
+        <div><span class="reports-eyebrow">SMARTPOS INSIGHTS</span><h1>Reports &amp; Analytics</h1><p>Your business, in focus. Explore the numbers behind every sale.</p></div>
+        <div class="reports-hero-actions">
+            <span class="reports-live"><span></span>@Definitions.Count reports</span>
+            <a href="@(_report is null || _loading ? null : ExportUrl)" aria-disabled="@(_report is null || _loading)" class="reports-export"><RadzenIcon Icon="download" /> Export workbook</a>
         </div>
-        <div class="kpi-card">
-            <div class="kpi-top"><span class="kpi-label">Gross profit</span><span class="kpi-chip chip-cash"><RadzenIcon Icon="trending_up" /></span></div>
-            <div class="kpi-value">@Money0(_report.SalesSummary.GrossProfit)</div>
-            <div class="page-subtitle">Margin @_report.SalesSummary.MarginPercent.ToString("0.#")%</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-top"><span class="kpi-label">Discounts</span><span class="kpi-chip chip-stock"><RadzenIcon Icon="percent" /></span></div>
-            <div class="kpi-value">@Money0(_report.SalesSummary.DiscountTotal)</div>
-        </div>
-        <div class="kpi-card">
-            <div class="kpi-top"><span class="kpi-label">Avg basket</span><span class="kpi-chip chip-tx"><RadzenIcon Icon="shopping_cart" /></span></div>
-            <div class="kpi-value">@Money0(_report.SalesSummary.AverageBasket)</div>
-            <div class="page-subtitle">@_report.SalesSummary.TransactionCount txns · @_report.SalesSummary.VoidCount voids</div>
-        </div>
-    </div>
+    </header>
 
-    <RadzenTabs>
-        <Tabs>
-            <RadzenTabsItem Text="Executive">
-                <div class="kpi-grid" style="margin-bottom:1rem">
-                    <div class="kpi-card"><div class="kpi-label">Gross sales</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.SalesSummary.GrossSales)</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Returns</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.SalesSummary.ReturnsTotal)</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Tax collected</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.SalesSummary.TaxCollected)</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Purchases</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Purchases.TotalPurchased)</div></div>
-                </div>
+    <section class="reports-filters" aria-label="Report filters">
+        <div class="reports-filter-fields">
+            <RadzenFormField Text="Store" Variant="Variant.Outlined" Style="width:100%">
+                <RadzenDropDown @bind-Value="_storeId" Data="@_storeOptions" Placeholder="All accessible stores" TextProperty="Text" ValueProperty="Value" AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Disabled="@_loading" Style="width:100%" />
+            </RadzenFormField>
+            <RadzenFormField Text="From (UTC)" Variant="Variant.Outlined" Style="width:100%">
+                <RadzenDatePicker @bind-Value="_from" DateFormat="dd MMM yyyy" ShowTime="false" Disabled="@_loading" Style="width:100%" />
+            </RadzenFormField>
+            <RadzenFormField Text="To (UTC, inclusive)" Variant="Variant.Outlined" Style="width:100%">
+                <RadzenDatePicker @bind-Value="_to" DateFormat="dd MMM yyyy" ShowTime="false" Disabled="@_loading" Style="width:100%" />
+            </RadzenFormField>
+            <RadzenButton Icon="tune" Text="Apply filters" Click="@LoadAsync" IsBusy="@_loading" Disabled="@_loading" />
+        </div>
+        <div class="reports-filter-footer">
+            <div class="reports-presets" aria-label="Date shortcuts">
+                @foreach (var preset in new[] { (0, "Today"), (6, "7 days"), (29, "30 days"), (-1, "This month"), (-2, "Last month") })
+                {
+                    <button type="button" disabled="@_loading" class="@(IsPreset(preset.Item1) ? "active" : "")" @onclick="@(() => SetPresetAsync(preset.Item1))">@preset.Item2</button>
+                }
+            </div>
+            <span class="reports-filter-note">@(HasPendingChanges ? "Filters changed — apply to update reports and export." : "Transaction dates and times use UTC. Stock figures are current.")</span>
+        </div>
+    </section>
 
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Daily sales trend</h3>
-                    <RadzenDataGrid Data="@_report.DailySales" TItem="DailySalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+    @if (_error is not null)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Danger" Variant="Variant.Flat" AllowClose="false">@_error</RadzenAlert>
+    }
+
+    <div class="reports-layout">
+        <aside class="reports-sidebar" aria-label="Report navigation">
+            <div class="reports-mobile-select">
+                <RadzenFormField Text="Choose a report" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenDropDown @bind-Value="_selectedId" Data="@Definitions" TextProperty="Title" ValueProperty="Id" Name="ReportSelector"
+                                    AllowFiltering="true" FilterCaseSensitivity="FilterCaseSensitivity.CaseInsensitive" Style="width:100%" />
+                </RadzenFormField>
+            </div>
+            <div class="reports-search"><RadzenIcon Icon="search" /><input aria-label="Find a report" placeholder="Find a report…" @bind="_navigationSearch" @bind:event="oninput" /></div>
+            <nav>
+                @foreach (var group in VisibleDefinitions.GroupBy(item => item.Group))
+                {
+                    <div class="reports-nav-group"><span>@group.Key</span>
+                        @foreach (var item in group)
+                        {
+                            <button type="button" class="@(_selectedId == item.Id ? "selected" : "")" aria-current="@(_selectedId == item.Id ? "page" : null)" @onclick="@(() => SelectReport(item.Id))"><RadzenIcon Icon="@item.Icon" /><span>@item.Title</span>@if (NewReportIds.Contains(item.Id)) { <small>NEW</small> }</button>
+                        }
+                    </div>
+                }
+                @if (!VisibleDefinitions.Any()) { <p class="reports-no-match">No matching reports.</p> }
+            </nav>
+        </aside>
+        <section class="reports-main" aria-busy="@_loading" aria-label="Report results">
+            <div class="reports-section-heading"><div><span class="reports-section-kicker">@ActiveDefinition.Group</span><h2>@ActiveDefinition.Title</h2><p>@ActiveDefinition.Description</p></div></div>
+            @if (_appliedQuery is not null)
+            {
+                <div class="reports-context"><span><RadzenIcon Icon="storefront" />@AppliedStoreName</span><span><RadzenIcon Icon="calendar_today" />@PeriodLabel</span><span class="reports-updated">Updated @_loadedAt.ToString("HH:mm") UTC</span></div>
+            }
+            @if (_loading) { <div class="reports-loading" role="status"><RadzenProgressBar Mode="ProgressBarMode.Indeterminate" ShowValue="false" /><span>Updating reports…</span></div> }
+            @if (_report is not null)
+            {
+                @if (_selectedId == "overview")
+                {
+                    <div class="reports-metrics">
+                        <article class="report-metric metric-primary"><span>Net sales <RadzenIcon Icon="payments" /></span><strong>@Money(_report.SalesSummary.NetSales)</strong><small>@_report.SalesSummary.TransactionCount.ToString("N0") transactions · after refunds</small></article>
+                        <article class="report-metric"><span>Gross profit <RadzenIcon Icon="trending_up" /></span><strong>@Money(_report.SalesSummary.GrossProfit)</strong><small>@Pct(_report.SalesSummary.MarginPercent) margin · before operating expenses</small></article>
+                        <article class="report-metric"><span>Average basket <RadzenIcon Icon="shopping_basket" /></span><strong>@Money(_report.SalesSummary.AverageBasket)</strong><small>@Money(_report.SalesSummary.DiscountTotal) discounts</small></article>
+                        <article class="report-metric"><span>Stock value now <RadzenIcon Icon="inventory_2" /></span><strong>@Money(_report.CurrentStock.Sum(row => row.StockValue))</strong><small>@_report.CurrentStock.Count.ToString("N0") stock lines · at current cost</small></article>
+                    </div>
+                    <div class="reports-charts">
+                        <section class="report-panel"><div class="report-panel-heading"><div><h3>Sales &amp; profit</h3><p>@TrendCaption</p></div><button type="button" class="report-text-action" @onclick="@(() => SelectReport("daily"))">View report <RadzenIcon Icon="arrow_forward" /></button></div>
+                            @if (_report.DailySales.Count > 0)
+                            {
+                                <RadzenChart Style="height:285px">
+                                    <RadzenLineSeries Data="@_trend" CategoryProperty="Date" ValueProperty="Sales" Title="Net sales" Stroke="#4f46e5"><RadzenMarkers Visible="@(_trend.Count == 1)" MarkerType="MarkerType.Circle" Size="6" /></RadzenLineSeries>
+                                    <RadzenLineSeries Data="@_trend" CategoryProperty="Date" ValueProperty="Profit" Title="Gross profit" Stroke="#10b981"><RadzenMarkers Visible="@(_trend.Count == 1)" MarkerType="MarkerType.Circle" Size="6" /></RadzenLineSeries>
+                                    <RadzenCategoryAxis Padding="15" FormatString="{0:dd MMM}" TickDistance="85" LabelAutoRotation="-45" />
+                                    <RadzenValueAxis Formatter="@ChartMoney" />
+                                    <RadzenLegend Position="LegendPosition.Bottom" />
+                                </RadzenChart>
+                            }
+                            else { <div class="report-chart-empty"><RadzenIcon Icon="show_chart" /><strong>No sales activity in this period</strong><span>Try another date range or store.</span></div> }
+                        </section>
+                        <section class="report-panel"><div class="report-panel-heading"><div><h3>Payment mix</h3><p>Receipts before refunds</p></div></div>
+                            @if (_report.PaymentMix.Any(row => row.Amount > 0))
+                            {
+                                <RadzenChart Style="height:285px"><RadzenDonutSeries Data="@_report.PaymentMix" CategoryProperty="Method" ValueProperty="Amount" /><RadzenLegend Position="LegendPosition.Bottom" /></RadzenChart>
+                            }
+                            else { <div class="report-chart-empty"><RadzenIcon Icon="account_balance_wallet" /><strong>No payment receipts</strong><span>Receipts will appear as sales are completed.</span></div> }
+                        </section>
+                    </div>
+                    <div class="reports-highlights">
+                        <section class="report-panel"><div class="report-panel-heading"><div><h3>Best-selling products</h3><p>Ranked by revenue after refunds</p></div><button type="button" class="report-text-action" @onclick="@(() => SelectReport("products"))">View all</button></div>
+                            @if (_report.ProductPerformance.Count == 0) { <p class="report-empty-inline">No product sales in this period.</p> }
+                            @foreach (var product in _report.ProductPerformance.Take(5))
+                            {
+                                <div class="report-ranking"><span class="report-ranking-icon"><RadzenIcon Icon="inventory_2" /></span><div><strong>@product.ProductName</strong><small>@product.Sku · @Qty(product.NetQuantity) net units</small></div><b>@Money(product.Revenue)</b></div>
+                            }
+                        </section>
+                        <section class="report-panel"><div class="report-panel-heading"><div><h3>Keep an eye on</h3><p>Useful signals for your next decision</p></div></div>
+                            <button type="button" class="report-attention" @onclick="@(() => SelectReport("low-stock"))"><span class="attention-icon amber"><RadzenIcon Icon="warning_amber" /></span><span><strong>Low &amp; out-of-stock</strong><small>Current stock lines needing review</small></span><b>@_report.CurrentStock.Count(row => row.IsLowStock || row.IsOutOfStock)</b><RadzenIcon Icon="chevron_right" /></button>
+                            <button type="button" class="report-attention" @onclick="@(() => SelectReport("slow-stock"))"><span class="attention-icon violet"><RadzenIcon Icon="hourglass_empty" /></span><span><strong>Slow-moving stock</strong><small>On hand now, five or fewer units sold in this period</small></span><b>@_report.SlowMovingStock.Count</b><RadzenIcon Icon="chevron_right" /></button>
+                            <button type="button" class="report-attention" @onclick="@(() => SelectReport("returns"))"><span class="attention-icon rose"><RadzenIcon Icon="assignment_return" /></span><span><strong>Returns &amp; refunds</strong><small>@_report.SalesSummary.ReturnCount refunds in this period</small></span><b>@Money(_report.SalesSummary.ReturnsTotal)</b><RadzenIcon Icon="chevron_right" /></button>
+                            <div class="report-secondary-totals"><span>Tax collected <strong>@Money(_report.SalesSummary.TaxCollected)</strong></span><span>Received purchases <strong>@Money(_report.Purchases.TotalPurchased)</strong></span></div>
+                        </section>
+                    </div>
+                }
+                else
+                {
+                    @if (_selectedId == "tax")
+                    {
+                        <div class="reports-metrics">
+                            <article class="report-metric"><span>Taxable sales</span><strong>@Money(_report.Tax.TaxableSales)</strong><small>Sales in the selected period</small></article>
+                            <article class="report-metric"><span>Tax collected</span><strong>@Money(_report.Tax.GstCollected)</strong><small>After refunds recorded in the period</small></article>
+                            <article class="report-metric"><span>Exempt sales</span><strong>@Money(_report.Tax.ExemptSales)</strong><small>Sales with no tax</small></article>
+                            <article class="report-metric"><span>Purchase tax</span><strong>@Money(_report.Purchases.TotalTax)</strong><small>Received purchases in the period</small></article>
+                        </div>
+                    }
+                    @if (_selectedId is "purchases" or "suppliers")
+                    {
+                        <div class="reports-metrics">
+                            <article class="report-metric"><span>Received purchases</span><strong>@_report.Purchases.PurchaseCount.ToString("N0")</strong><small>By receipt date</small></article>
+                            <article class="report-metric"><span>Purchase total</span><strong>@Money(_report.Purchases.TotalPurchased)</strong><small>Including purchase tax</small></article>
+                            <article class="report-metric"><span>Purchase tax</span><strong>@Money(_report.Purchases.TotalTax)</strong><small>Received purchases only</small></article>
+                        </div>
+                    }
+                    <section class="report-panel report-table" @key="_selectedId">
+                        <div class="report-panel-heading"><div><h3>@ActiveDefinition.Title</h3><p>@ActiveRowCount.ToString("N0") rows · sort or filter columns to explore</p></div><span class="report-table-badge">@(IsSnapshot ? "Current snapshot" : "Selected period")</span></div>
+                        @switch (_selectedId)
+                        {
+                            case "daily":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.DailySales" TItem="DailySalesRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="DailySalesRowDto" Property="Date" Title="Date" Width="135px">
                                 <Template Context="d">@d.Date.ToString("dd MMM yyyy")</Template>
@@ -82,13 +162,27 @@ else if (_report is not null)
                             <RadzenDataGridColumn TItem="DailySalesRowDto" Property="VoidCount" Title="Voids" Width="80px" TextAlign="TextAlign.Center" />
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Sales">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Sales by store</h3>
-                    <RadzenDataGrid Data="@_report.SalesByStore" TItem="StoreSalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                                break;
+                            case "invoices":
+<RadzenDataGrid Data="@_report.SalesRegister" TItem="SalesRegisterRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters.">
+<Columns>
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="CompletedOn" Title="Completed (UTC)" Width="170px"><Template Context="row">@row.CompletedOn.ToString("dd MMM yyyy HH:mm")</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="SaleNumber" Title="Invoice" Width="170px" />
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="StoreName" Title="Store" Width="170px" />
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="CashierName" Title="Cashier" Width="170px" />
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="CustomerName" Title="Customer" Width="170px" />
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="Status" Title="Status" Width="170px"><Template Context="row"><span class="report-status">@row.Status</span></Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="PaymentMethods" Title="Payment" Width="170px" />
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="TotalAmount" Title="Invoice total" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.TotalAmount)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="Discounts" Title="Discounts" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.Discounts)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="Tax" Title="Tax" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.Tax)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="RefundsInPeriod" Title="Refunds in period" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.RefundsInPeriod)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SalesRegisterRowDto" Property="NetSales" Title="Net sales" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.NetSales)</Template></RadzenDataGridColumn>
+</Columns>
+</RadzenDataGrid>
+                                break;
+                            case "stores":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.SalesByStore" TItem="StoreSalesRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="StoreName" Title="Store" />
                             <RadzenDataGridColumn TItem="StoreSalesRowDto" Property="Transactions" Title="Txns" Width="90px" TextAlign="TextAlign.Center" />
@@ -102,11 +196,9 @@ else if (_report is not null)
                             </RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-
-                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
-                    <h3 style="margin-top:0">Sales by cashier</h3>
-                    <RadzenDataGrid Data="@_report.SalesByCashier" TItem="CashierSalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                                break;
+                            case "cashiers":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.SalesByCashier" TItem="CashierSalesRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="CashierName" Title="Cashier" />
                             <RadzenDataGridColumn TItem="CashierSalesRowDto" Property="Transactions" Title="Txns" Width="80px" TextAlign="TextAlign.Center" />
@@ -120,11 +212,22 @@ else if (_report is not null)
                             </RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-
-                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
-                    <h3 style="margin-top:0">Hourly sales</h3>
-                    <RadzenDataGrid Data="@_report.HourlySales" TItem="HourlySalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                                break;
+                            case "registers":
+<RadzenDataGrid Data="@_report.SalesByRegister" TItem="RegisterSalesRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters.">
+<Columns>
+<RadzenDataGridColumn TItem="RegisterSalesRowDto" Property="StoreName" Title="Store" Width="170px" />
+<RadzenDataGridColumn TItem="RegisterSalesRowDto" Property="RegisterName" Title="Register" Width="170px" />
+<RadzenDataGridColumn TItem="RegisterSalesRowDto" Property="Transactions" Title="Transactions" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@row.Transactions.ToString("N0")</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="RegisterSalesRowDto" Property="NetSales" Title="Sales before refunds" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.NetSales)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="RegisterSalesRowDto" Property="CashSales" Title="Cash" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.CashSales)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="RegisterSalesRowDto" Property="CardSales" Title="Card" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.CardSales)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="RegisterSalesRowDto" Property="CreditSales" Title="Credit" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.CreditSales)</Template></RadzenDataGridColumn>
+</Columns>
+</RadzenDataGrid>
+                                break;
+                            case "hourly":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.HourlySales" TItem="HourlySalesRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="HourlySalesRowDto" Property="HourLabel" Title="Hour" />
                             <RadzenDataGridColumn TItem="HourlySalesRowDto" Property="Transactions" Title="Txns" Width="90px" TextAlign="TextAlign.Center" />
@@ -132,13 +235,20 @@ else if (_report is not null)
                             <RadzenDataGridColumn TItem="HourlySalesRowDto" Property="AverageBasket" Title="Avg basket" TextAlign="TextAlign.End"><Template Context="h">@Money(h.AverageBasket)</Template></RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Products & Profit">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Product profitability</h3>
-                    <RadzenDataGrid Data="@_report.TopProducts" TItem="ProductSalesRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                                break;
+                            case "weekdays":
+<RadzenDataGrid Data="@_report.WeekdaySales" TItem="WeekdaySalesRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters.">
+<Columns>
+<RadzenDataGridColumn TItem="WeekdaySalesRowDto" Property="DayName" Title="Weekday (UTC)" Width="170px" />
+<RadzenDataGridColumn TItem="WeekdaySalesRowDto" Property="DaysInPeriod" Title="Days in range" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@row.DaysInPeriod.ToString("N0")</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="WeekdaySalesRowDto" Property="Transactions" Title="Transactions" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@row.Transactions.ToString("N0")</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="WeekdaySalesRowDto" Property="NetSales" Title="Net sales" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.NetSales)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="WeekdaySalesRowDto" Property="AverageDailySales" Title="Average per day" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.AverageDailySales)</Template></RadzenDataGridColumn>
+</Columns>
+</RadzenDataGrid>
+                                break;
+                            case "products":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.ProductPerformance" TItem="ProductSalesRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="Sku" Title="SKU" Width="120px" />
                             <RadzenDataGridColumn TItem="ProductSalesRowDto" Property="ProductName" Title="Product" />
@@ -154,11 +264,9 @@ else if (_report is not null)
                             </RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-
-                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
-                    <h3 style="margin-top:0">Category performance</h3>
-                    <RadzenDataGrid Data="@_report.SalesByCategory" TItem="CategorySalesRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
+                                break;
+                            case "categories":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.SalesByCategory" TItem="CategorySalesRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="CategoryName" Title="Category" />
                             <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="QuantitySold" Title="Qty" TextAlign="TextAlign.End"><Template Context="c">@Qty(c.QuantitySold)</Template></RadzenDataGridColumn>
@@ -167,75 +275,20 @@ else if (_report is not null)
                             <RadzenDataGridColumn TItem="CategorySalesRowDto" Property="MarginPercent" Title="Margin" TextAlign="TextAlign.End"><Template Context="c">@Pct(c.MarginPercent)</Template></RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Payments & Discounts">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Payment mix</h3>
-                    <RadzenDataGrid Data="@_report.PaymentMix" TItem="PaymentMethodRowDto" AllowSorting="true">
-                        <Columns>
-                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="Method" Title="Method" />
-                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="PaymentCount" Title="Lines" Width="100px" TextAlign="TextAlign.Center" />
-                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="Amount" Title="Amount" TextAlign="TextAlign.End"><Template Context="p">@Money(p.Amount)</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="PercentOfTotal" Title="Share" Width="100px" TextAlign="TextAlign.End"><Template Context="p">@Pct(p.PercentOfTotal)</Template></RadzenDataGridColumn>
-                        </Columns>
-                    </RadzenDataGrid>
-                </RadzenCard>
-
-                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
-                    <h3 style="margin-top:0">Discount details</h3>
-                    <RadzenDataGrid Data="@_report.Discounts" TItem="DiscountReportRowDto" AllowPaging="true" PageSize="15" AllowSorting="true" AllowFiltering="true">
-                        <Columns>
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="CompletedOn" Title="Date" Width="135px"><Template Context="d">@d.CompletedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="SaleNumber" Title="Sale #" Width="160px" />
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="StoreName" Title="Store" />
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="CashierName" Title="Cashier" />
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="InvoiceDiscount" Title="Invoice" TextAlign="TextAlign.End"><Template Context="d">@Money(d.InvoiceDiscount)</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="LineDiscount" Title="Lines" TextAlign="TextAlign.End"><Template Context="d">@Money(d.LineDiscount)</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="TotalDiscount" Title="Total" TextAlign="TextAlign.End"><Template Context="d"><strong>@Money(d.TotalDiscount)</strong></Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="Reason" Title="Reason" />
-                        </Columns>
-                    </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Voids & Returns">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Voided sales</h3>
-                    <RadzenDataGrid Data="@_report.Voids" TItem="VoidSaleReportRowDto" AllowPaging="true" PageSize="15" AllowSorting="true">
-                        <Columns>
-                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CompletedOn" Title="Date" Width="135px"><Template Context="v">@v.CompletedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="SaleNumber" Title="Sale #" Width="160px" />
-                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="StoreName" Title="Store" />
-                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CashierName" Title="Cashier" />
-                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CustomerName" Title="Customer" />
-                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="TotalAmount" Title="Amount" TextAlign="TextAlign.End"><Template Context="v">@Money(v.TotalAmount)</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="Notes" Title="Notes" />
-                        </Columns>
-                    </RadzenDataGrid>
-                </RadzenCard>
-
-                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
-                    <h3 style="margin-top:0">Returns / refunds</h3>
-                    <RadzenDataGrid Data="@_report.Returns" TItem="ReturnReportRowDto" AllowPaging="true" PageSize="15" AllowSorting="true" AllowFiltering="true">
-                        <Columns>
-                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ProcessedOn" Title="Date" Width="135px"><Template Context="r">@r.ProcessedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ReturnNumber" Title="Return #" Width="160px" />
-                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="StoreName" Title="Store" />
-                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ProcessedByName" Title="Processed by" />
-                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="RefundMethod" Title="Method" Width="100px" />
-                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="TotalAmount" Title="Amount" TextAlign="TextAlign.End"><Template Context="r">@Money(r.TotalAmount)</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="Notes" Title="Notes" />
-                        </Columns>
-                    </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Inventory">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Current stock, low stock and valuation</h3>
-                    <RadzenDataGrid Data="@_report.CurrentStock" TItem="CurrentStockRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                                break;
+                            case "brands":
+<RadzenDataGrid Data="@_report.SalesByBrand" TItem="BrandSalesRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters.">
+<Columns>
+<RadzenDataGridColumn TItem="BrandSalesRowDto" Property="BrandName" Title="Brand" Width="170px" />
+<RadzenDataGridColumn TItem="BrandSalesRowDto" Property="QuantitySold" Title="Net units" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Qty(row.QuantitySold)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="BrandSalesRowDto" Property="Revenue" Title="Revenue" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.Revenue)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="BrandSalesRowDto" Property="GrossProfit" Title="Gross profit" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.GrossProfit)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="BrandSalesRowDto" Property="MarginPercent" Title="Margin" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Pct(row.MarginPercent)</Template></RadzenDataGridColumn>
+</Columns>
+</RadzenDataGrid>
+                                break;
+                            case "inventory":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.CurrentStock" TItem="CurrentStockRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="StoreName" Title="Store" />
                             <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="Sku" Title="SKU" Width="110px" />
@@ -262,11 +315,68 @@ else if (_report is not null)
                             </RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-
-                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
-                    <h3 style="margin-top:0">Stock movement summary</h3>
-                    <RadzenDataGrid Data="@_report.StockMovements" TItem="StockMovementSummaryRowDto" AllowSorting="true">
+                                break;
+                            case "low-stock":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.CurrentStock.Where(row => row.IsLowStock || row.IsOutOfStock)" TItem="CurrentStockRowDto">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="Sku" Title="SKU" Width="110px" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="ProductName" Title="Product" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="CategoryName" Title="Category" Width="145px" />
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="QuantityOnHand" Title="On hand" TextAlign="TextAlign.End"><Template Context="s">@Qty(s.QuantityOnHand)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="ReorderLevel" Title="Reorder" TextAlign="TextAlign.End"><Template Context="s">@Qty(s.ReorderLevel)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Property="StockValue" Title="Value" TextAlign="TextAlign.End"><Template Context="s">@Money(s.StockValue)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="CurrentStockRowDto" Title="Status" Width="115px">
+                                <Template Context="s">
+                                    @if (s.IsOutOfStock)
+                                    {
+                                        <span class="text-warn">Out</span>
+                                    }
+                                    else if (s.IsLowStock)
+                                    {
+                                        <span class="text-warn">Low</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-ok">OK</span>
+                                    }
+                                </Template>
+                            </RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                                break;
+                            case "slow-stock":
+<RadzenDataGrid Data="@_report.SlowMovingStock" TItem="SlowMovingStockRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters.">
+<Columns>
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="StoreName" Title="Store" Width="170px" />
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="Sku" Title="SKU" Width="170px" />
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="ProductName" Title="Product" Width="170px" />
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="QuantityOnHand" Title="On hand now" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Qty(row.QuantityOnHand)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="QuantitySold" Title="Units sold in period" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Qty(row.QuantitySold)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="StockValue" Title="Current stock value" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.StockValue)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="StockCoverDays" Title="Est. cover (days)" Width="170px"><Template Context="row">@(row.QuantitySold == 0 ? "—" : row.StockCoverDays.ToString("0.#"))</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="SlowMovingStockRowDto" Property="LastSaleInPeriod" Title="Last sale in period" Width="170px"><Template Context="row">@(row.LastSaleInPeriod?.ToString("dd MMM yyyy") ?? "No sales")</Template></RadzenDataGridColumn>
+</Columns>
+</RadzenDataGrid>
+                                break;
+                            case "ledger":
+<RadzenDataGrid Data="@_report.StockLedger" TItem="StockLedgerReportRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters.">
+<Columns>
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="OccurredOn" Title="Occurred (UTC)" Width="170px"><Template Context="row">@row.OccurredOn.ToString("dd MMM yyyy HH:mm")</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="StoreName" Title="Store" Width="170px" />
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="Sku" Title="SKU" Width="170px" />
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="ProductName" Title="Product" Width="170px" />
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="MovementType" Title="Movement" Width="170px" />
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="QuantityIn" Title="In" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Qty(row.QuantityIn)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="QuantityOut" Title="Out" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Qty(row.QuantityOut)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="QuantityAfter" Title="Balance after" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Qty(row.QuantityAfter)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="Reference" Title="Reference" Width="170px" />
+<RadzenDataGridColumn TItem="StockLedgerReportRowDto" Property="Notes" Title="Notes" Width="170px" />
+</Columns>
+</RadzenDataGrid>
+                                break;
+                            case "movements":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.StockMovements" TItem="StockMovementSummaryRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="MovementType" Title="Movement" />
                             <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="MovementCount" Title="Count" Width="100px" TextAlign="TextAlign.Center" />
@@ -275,13 +385,9 @@ else if (_report is not null)
                             <RadzenDataGridColumn TItem="StockMovementSummaryRowDto" Property="NetQuantity" Title="Net" TextAlign="TextAlign.End"><Template Context="m">@Qty(m.NetQuantity)</Template></RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Transfers">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Stock transfers</h3>
-                    <RadzenDataGrid Data="@_report.StockTransfers" TItem="StockTransferReportRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                                break;
+                            case "transfers":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.StockTransfers" TItem="StockTransferReportRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="RequestedOn" Title="Requested" Width="135px"><Template Context="t">@t.RequestedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
                             <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="TransferNumber" Title="Transfer #" Width="180px" />
@@ -293,13 +399,59 @@ else if (_report is not null)
                             <RadzenDataGridColumn TItem="StockTransferReportRowDto" Property="QuantityReceived" Title="Received" TextAlign="TextAlign.End"><Template Context="t">@Qty(t.QuantityReceived)</Template></RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Cash & Shifts">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Shift cash report</h3>
-                    <RadzenDataGrid Data="@_report.Shifts" TItem="ShiftCashReportRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                                break;
+                            case "payments":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.PaymentMix" TItem="PaymentMethodRowDto">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="Method" Title="Method" />
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="PaymentCount" Title="Lines" Width="100px" TextAlign="TextAlign.Center" />
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="Amount" Title="Amount" TextAlign="TextAlign.End"><Template Context="p">@Money(p.Amount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="PaymentMethodRowDto" Property="PercentOfTotal" Title="Share" Width="100px" TextAlign="TextAlign.End"><Template Context="p">@Pct(p.PercentOfTotal)</Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                                break;
+                            case "discounts":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.Discounts" TItem="DiscountReportRowDto">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="CompletedOn" Title="Date" Width="135px"><Template Context="d">@d.CompletedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="SaleNumber" Title="Sale #" Width="160px" />
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="CashierName" Title="Cashier" />
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="InvoiceDiscount" Title="Invoice" TextAlign="TextAlign.End"><Template Context="d">@Money(d.InvoiceDiscount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="LineDiscount" Title="Lines" TextAlign="TextAlign.End"><Template Context="d">@Money(d.LineDiscount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="TotalDiscount" Title="Total" TextAlign="TextAlign.End"><Template Context="d"><strong>@Money(d.TotalDiscount)</strong></Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="DiscountReportRowDto" Property="Reason" Title="Reason" />
+                        </Columns>
+                    </RadzenDataGrid>
+                                break;
+                            case "returns":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.Returns" TItem="ReturnReportRowDto">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ProcessedOn" Title="Date" Width="135px"><Template Context="r">@r.ProcessedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ReturnNumber" Title="Return #" Width="160px" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="ProcessedByName" Title="Processed by" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="RefundMethod" Title="Method" Width="100px" />
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="TotalAmount" Title="Amount" TextAlign="TextAlign.End"><Template Context="r">@Money(r.TotalAmount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="ReturnReportRowDto" Property="Notes" Title="Notes" />
+                        </Columns>
+                    </RadzenDataGrid>
+                                break;
+                            case "voids":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.Voids" TItem="VoidSaleReportRowDto">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CompletedOn" Title="Date" Width="135px"><Template Context="v">@v.CompletedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="SaleNumber" Title="Sale #" Width="160px" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="StoreName" Title="Store" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CashierName" Title="Cashier" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="CustomerName" Title="Customer" />
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="TotalAmount" Title="Amount" TextAlign="TextAlign.End"><Template Context="v">@Money(v.TotalAmount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="VoidSaleReportRowDto" Property="Notes" Title="Notes" />
+                        </Columns>
+                    </RadzenDataGrid>
+                                break;
+                            case "shifts":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.Shifts" TItem="ShiftCashReportRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="OpenedOn" Title="Opened" Width="135px"><Template Context="s">@s.OpenedOn.ToString("dd MMM HH:mm")</Template></RadzenDataGridColumn>
                             <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="ShiftNumber" Title="Shift #" Width="190px" />
@@ -312,47 +464,42 @@ else if (_report is not null)
                             <RadzenDataGridColumn TItem="ShiftCashReportRowDto" Property="Variance" Title="Variance" TextAlign="TextAlign.End"><Template Context="s"><span class="@(s.Variance == 0 ? "text-ok" : "text-warn")">@Money(s.Variance)</span></Template></RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Tax & Purchases">
-                <div class="kpi-grid" style="margin-bottom:1rem">
-                    <div class="kpi-card"><div class="kpi-label">Taxable sales</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Tax.TaxableSales)</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Tax collected</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Tax.GstCollected)</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Exempt sales</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Tax.ExemptSales)</div></div>
-                    <div class="kpi-card"><div class="kpi-label">Purchase tax</div><div class="kpi-value" style="font-size:1.1rem">@Money(_report.Purchases.TotalTax)</div></div>
-                </div>
-
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Tax by rate</h3>
-                    <RadzenDataGrid Data="@_report.Tax.ByRate" TItem="TaxRateRowDto">
-                        <Columns>
-                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="Rate" Title="Rate" Width="100px"><Template Context="t">@Pct(t.Rate)</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="TaxableAmount" Title="Taxable" TextAlign="TextAlign.End"><Template Context="t">@Money(t.TaxableAmount)</Template></RadzenDataGridColumn>
-                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="TaxAmount" Title="Tax" TextAlign="TextAlign.End"><Template Context="t"><strong>@Money(t.TaxAmount)</strong></Template></RadzenDataGridColumn>
-                        </Columns>
-                    </RadzenDataGrid>
-                </RadzenCard>
-
-                <RadzenCard class="content-card grid-card" style="margin-top:1rem">
-                    <h3 style="margin-top:0">Purchases by supplier</h3>
-                    <p style="margin:0 0 1rem;color:var(--sp-text-muted)">
-                        @_report.Purchases.PurchaseCount GRNs · Total @Money(_report.Purchases.TotalPurchased) · Tax @Money(_report.Purchases.TotalTax)
-                    </p>
-                    <RadzenDataGrid Data="@_report.Purchases.BySupplier" TItem="PurchaseSupplierRowDto" AllowSorting="true">
+                                break;
+                            case "purchases":
+<RadzenDataGrid Data="@_report.PurchaseRegister" TItem="PurchaseRegisterRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters.">
+<Columns>
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="ReceivedOn" Title="Received (UTC)" Width="170px"><Template Context="row">@row.ReceivedOn.ToString("dd MMM yyyy HH:mm")</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="PurchaseNumber" Title="GRN" Width="170px" />
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="StoreName" Title="Store" Width="170px" />
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="SupplierName" Title="Supplier" Width="170px" />
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="LineCount" Title="Lines" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@row.LineCount.ToString("N0")</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="Quantity" Title="Quantity" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Qty(row.Quantity)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="Subtotal" Title="Subtotal" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.Subtotal)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="Tax" Title="Tax" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.Tax)</Template></RadzenDataGridColumn>
+<RadzenDataGridColumn TItem="PurchaseRegisterRowDto" Property="TotalAmount" Title="Total" Width="170px" TextAlign="TextAlign.End"><Template Context="row">@Money(row.TotalAmount)</Template></RadzenDataGridColumn>
+</Columns>
+</RadzenDataGrid>
+                                break;
+                            case "suppliers":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.Purchases.BySupplier" TItem="PurchaseSupplierRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="PurchaseSupplierRowDto" Property="SupplierName" Title="Supplier" />
                             <RadzenDataGridColumn TItem="PurchaseSupplierRowDto" Property="PurchaseCount" Title="GRNs" Width="100px" TextAlign="TextAlign.Center" />
                             <RadzenDataGridColumn TItem="PurchaseSupplierRowDto" Property="TotalAmount" Title="Total" TextAlign="TextAlign.End"><Template Context="s"><strong>@Money(s.TotalAmount)</strong></Template></RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-
-            <RadzenTabsItem Text="Customers">
-                <RadzenCard class="content-card grid-card">
-                    <h3 style="margin-top:0">Top customers and outstanding balances</h3>
-                    <RadzenDataGrid Data="@_report.Customers" TItem="CustomerReportRowDto" AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true">
+                                break;
+                            case "tax":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.Tax.ByRate" TItem="TaxRateRowDto">
+                        <Columns>
+                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="Rate" Title="Rate" Width="100px"><Template Context="t">@Pct(t.Rate)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="TaxableAmount" Title="Taxable" TextAlign="TextAlign.End"><Template Context="t">@Money(t.TaxableAmount)</Template></RadzenDataGridColumn>
+                            <RadzenDataGridColumn TItem="TaxRateRowDto" Property="TaxAmount" Title="Tax" TextAlign="TextAlign.End"><Template Context="t"><strong>@Money(t.TaxAmount)</strong></Template></RadzenDataGridColumn>
+                        </Columns>
+                    </RadzenDataGrid>
+                                break;
+                            case "customers":
+<RadzenDataGrid AllowPaging="true" PageSize="20" AllowSorting="true" AllowFiltering="true" AllowColumnResize="true" ShowPagingSummary="true" EmptyText="No records match these filters." Data="@_report.Customers" TItem="CustomerReportRowDto">
                         <Columns>
                             <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="CustomerName" Title="Customer" />
                             <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="Phone" Title="Phone" Width="150px" />
@@ -364,135 +511,16 @@ else if (_report is not null)
                             <RadzenDataGridColumn TItem="CustomerReportRowDto" Property="LastPurchaseOn" Title="Last purchase" Width="140px"><Template Context="c">@(c.LastPurchaseOn?.ToString("dd MMM yyyy") ?? "-")</Template></RadzenDataGridColumn>
                         </Columns>
                     </RadzenDataGrid>
-                </RadzenCard>
-            </RadzenTabsItem>
-        </Tabs>
-    </RadzenTabs>
-}
-
-@code {
-    private ReportsPageDto? _report;
-    private List<StoreOption> _storeOptions = [new("All stores", null)];
-    private Guid? _storeId;
-    private DateTime? _from = DateTime.Today.AddDays(-29);
-    private DateTime? _to = DateTime.Today;
-    private bool _loading = true;
-
-    private sealed record StoreOption(string Text, Guid? Value);
-
-    protected override async Task OnInitializedAsync()
-    {
-        var stores = await StoreService.GetAllAsync(includeInactive: false);
-        _storeOptions.AddRange(stores.Select(s => new StoreOption($"{s.Code} · {s.Name}", s.Id)));
-        if (StoreContext.StoreId is { } selectedStore && stores.Any(s => s.Id == selectedStore))
-        {
-            _storeId = selectedStore;
-        }
-
-        await LoadAsync();
-    }
-
-    private async Task LoadAsync()
-    {
-        _loading = true;
-        StateHasChanged();
-
-        _report = await ReportService.GetReportsAsync(new ReportQueryDto
-        {
-            StoreId = _storeId,
-            FromUtc = _from?.Date.ToUniversalTime(),
-            ToUtc = _to?.Date.AddDays(1).ToUniversalTime()
-        });
-
-        _loading = false;
-    }
-
-    private async Task SetPresetAsync(int daysBack)
-    {
-        _to = DateTime.Today;
-        _from = DateTime.Today.AddDays(-daysBack);
-        await LoadAsync();
-    }
-
-    private string ExportUrl
-    {
-        get
-        {
-            var parts = new List<string>();
-
-            if (_storeId.HasValue)
-            {
-                parts.Add($"storeId={_storeId.Value}");
+                                break;
+                        }
+                    </section>
+                    <p class="reports-table-help"><RadzenIcon Icon="info" /> Scroll horizontally to see all columns. The workbook uses the applied store and dates; column filters affect this table only.</p>
+                }
             }
-
-            if (_from.HasValue)
+            else if (!_loading)
             {
-                parts.Add($"fromUtc={Uri.EscapeDataString(_from.Value.Date.ToUniversalTime().ToString("O"))}");
+                <div class="report-chart-empty"><RadzenIcon Icon="insights" /><strong>Your reports are not loaded yet</strong><span>Apply filters to load the report workspace.</span></div>
             }
-
-            if (_to.HasValue)
-            {
-                parts.Add($"toUtc={Uri.EscapeDataString(_to.Value.Date.AddDays(1).ToUniversalTime().ToString("O"))}");
-            }
-
-            return "/api/reports/export" + (parts.Count == 0 ? string.Empty : "?" + string.Join("&", parts));
-        }
-    }
-
-    private async Task ShowStoreInsightAsync(StoreSalesRowDto row) =>
-        await ShowInsightAsync($"Store · {row.StoreName}", new Dictionary<string, string>
-        {
-            ["Transactions"] = row.Transactions.ToString("N0"),
-            ["Gross Sales"] = Money(row.GrossSales),
-            ["Returns"] = Money(row.Returns),
-            ["Net Sales"] = Money(row.NetSales),
-            ["Discounts"] = Money(row.Discounts),
-            ["Gross Profit"] = Money(row.GrossProfit),
-            ["Margin"] = Pct(row.MarginPercent),
-            ["Average Basket"] = Money(row.AverageBasket)
-        });
-
-    private async Task ShowCashierInsightAsync(CashierSalesRowDto row) =>
-        await ShowInsightAsync($"Cashier · {row.CashierName}", new Dictionary<string, string>
-        {
-            ["Transactions"] = row.Transactions.ToString("N0"),
-            ["Void Count"] = row.VoidCount.ToString("N0"),
-            ["Return Count"] = row.ReturnCount.ToString("N0"),
-            ["Gross Sales"] = Money(row.GrossSales),
-            ["Discounts"] = Money(row.Discounts),
-            ["Returns"] = Money(row.Returns),
-            ["Net Sales"] = Money(row.NetSales),
-            ["Average Basket"] = Money(row.AverageBasket)
-        });
-
-    private async Task ShowProductInsightAsync(ProductSalesRowDto row) =>
-        await ShowInsightAsync($"Product · {row.ProductName}", new Dictionary<string, string>
-        {
-            ["SKU"] = row.Sku,
-            ["Category"] = row.CategoryName,
-            ["Brand"] = row.BrandName,
-            ["Quantity Sold"] = Qty(row.QuantitySold),
-            ["Quantity Returned"] = Qty(row.QuantityReturned),
-            ["Net Quantity"] = Qty(row.NetQuantity),
-            ["Revenue"] = Money(row.Revenue),
-            ["Cost"] = Money(row.Cost),
-            ["Gross Profit"] = Money(row.GrossProfit),
-            ["Margin"] = Pct(row.MarginPercent),
-            ["Discount"] = Money(row.DiscountAmount)
-        });
-
-    private async Task ShowInsightAsync(string title, Dictionary<string, string> details)
-    {
-        await DialogService.OpenAsync<ReportInsightDialog>(title,
-            new Dictionary<string, object>
-            {
-                [nameof(ReportInsightDialog.Details)] = details
-            },
-            new DialogOptions { Width = "520px", CloseDialogOnOverlayClick = true });
-    }
-
-    private static string Money(decimal value) => value.ToString("C2");
-    private static string Money0(decimal value) => value.ToString("C0");
-    private static string Qty(decimal value) => value.ToString("0.###");
-    private static string Pct(decimal value) => value.ToString("0.#") + "%";
-}
+        </section>
+    </div>
+</div>

@@ -1,0 +1,42 @@
+{
+  "patch": "SmartPOS Reports UI and Analytics",
+  "base": "Project with previous backend/Blazor and product-pricing patches applied",
+  "files": [
+    {
+      "path": "src/SmartPOS.Infrastructure/Services/Management/ReportService.cs",
+      "sha256": "eb317949ef28250194cd2194cfcf97813f8fed8f86dd28d4bff43b659e3ede6a"
+    },
+    {
+      "path": "src/SmartPOS.Infrastructure/Services/Management/ReportService.Analytics.cs",
+      "sha256": "62ebfe7d54b56ca9a13f6ca67a77c5a202548a5fa3b15932d4fb18a66f07c085"
+    },
+    {
+      "path": "src/SmartPOS.Shared/Contracts/ReportDtos.cs",
+      "sha256": "1f6463cc1802667a6851b575f0faa6c882e8f93fe3a13f459cc58b1be60ea285"
+    },
+    {
+      "path": "src/SmartPOS.Shared/Contracts/ReportAnalyticsDtos.cs",
+      "sha256": "77caec3486f91feb5ab44277a657a829ebe0ec128b611a0e2d1181c60ed79e8c"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Modules/Reports.razor",
+      "sha256": "223e9f88a5a577b3ce2ada169297b72d2c9ca7f784d4ce11bbe7e37c8282860e"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Modules/Reports.razor.cs",
+      "sha256": "48d6b9e888c5f845a7f2b78e5b9e0244abca0fe1c3c39b8de24c937ce6b4c6e7"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Modules/Reports.razor.css",
+      "sha256": "b69a0ca54f747beb83ae579980dcbd05009dea91f7b2b21d1cc0230a7fe5fae4"
+    },
+    {
+      "path": "tests/SmartPOS.Tests/PosRegressionTests.cs",
+      "sha256": "cff944453f695bb5ab0b05b07cf66557e137975143a1f0ec73227384f845e37f"
+    },
+    {
+      "path": "tests/SmartPOS.Tests/ReportsRegressionTests.cs",
+      "sha256": "fcb0b2dea9823dcf2f45cc202fc8f2f121ab1f36967e37a6cb9a326ded380fd1"
+    }
+  ]
+}

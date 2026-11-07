@@ -14,6 +14,8 @@ namespace SmartPOS.Infrastructure.Services.Management;
 public sealed class ManagerApprovalService(
     AppDbContext db,
     UserManager<ApplicationUser> userManager,
+    SignInManager<ApplicationUser> signInManager,
+    IStoreAccessService storeAccess,
     ITenantContext tenantContext,
     ICurrentUserService currentUser,
     IDateTimeProvider clock) : IManagerApprovalService
@@ -32,8 +34,12 @@ public sealed class ManagerApprovalService(
             return Result<ManagerApprovalResultDto>.Failure("No active company context.", "NO_TENANT");
         }
 
-        var email = request.ManagerEmail.Trim();
-        var reason = request.Reason.Trim();
+        if (!currentUser.IsAuthenticated || string.IsNullOrWhiteSpace(currentUser.UserId) ||
+            !Enum.IsDefined(request.ApprovalType) || request.StoreId is null || request.Amount is null or < 0)
+            return Result<ManagerApprovalResultDto>.Failure("A signed-in user, store, action, and valid amount are required.", "VALIDATION");
+        await storeAccess.EnsureCanAccessStoreAsync(request.StoreId.Value, ct);
+        var email = request.ManagerEmail?.Trim() ?? string.Empty;
+        var reason = request.Reason?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(request.ManagerPassword))
         {
             return Result<ManagerApprovalResultDto>.Failure("Manager email and password are required.", "VALIDATION");
@@ -45,15 +51,15 @@ public sealed class ManagerApprovalService(
         }
 
         var manager = await userManager.Users
-            .FirstOrDefaultAsync(u => u.NormalizedEmail == email.ToUpper() && u.TenantId == tenantContext.TenantId.Value, ct);
+            .FirstOrDefaultAsync(u => u.NormalizedEmail == userManager.NormalizeEmail(email) && u.TenantId == tenantContext.TenantId.Value, ct);
 
         if (manager is null || !manager.IsActive)
         {
             return Result<ManagerApprovalResultDto>.Failure("Manager approval failed. Check manager account and password.", "APPROVAL_FAILED");
         }
 
-        var passwordOk = await userManager.CheckPasswordAsync(manager, request.ManagerPassword);
-        if (!passwordOk)
+        var passwordCheck = await signInManager.CheckPasswordSignInAsync(manager, request.ManagerPassword, lockoutOnFailure: true);
+        if (!passwordCheck.Succeeded)
         {
             return Result<ManagerApprovalResultDto>.Failure("Manager approval failed. Check manager account and password.", "APPROVAL_FAILED");
         }
@@ -107,7 +113,11 @@ public sealed class ManagerApprovalService(
 
     public async Task<IReadOnlyList<ManagerApprovalLogDto>> GetRecentAsync(Guid? storeId = null, int take = 100, CancellationToken ct = default)
     {
-        var query = db.Set<ManagerApprovalLog>().AsNoTracking();
+        var allowed = await storeAccess.GetAllowedStoreIdsAsync(ct);
+        if (storeId is { } requestedStore)
+            await storeAccess.EnsureCanAccessStoreAsync(requestedStore, ct);
+        var query = db.Set<ManagerApprovalLog>().AsNoTracking()
+            .Where(log => log.StoreId != null && allowed.Contains(log.StoreId.Value));
         if (storeId is not null)
         {
             query = query.Where(x => x.StoreId == storeId);

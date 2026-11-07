@@ -10,14 +10,13 @@ internal static class CashLedgerHelper
 {
     public static async Task<decimal> GetBalanceAsync(AppDbContext db, Guid shiftId, CancellationToken ct)
     {
-        var last = await db.CashMovements.AsNoTracking()
-            .Where(m => m.ShiftId == shiftId)
-            .OrderByDescending(m => m.OccurredOn)
-            .ThenByDescending(m => m.CreatedOn)
-            .Select(m => (decimal?)m.BalanceAfter)
-            .FirstOrDefaultAsync(ct);
-
-        return last ?? 0m;
+        var persisted = await db.CashMovements.AsNoTracking()
+            .Where(movement => movement.ShiftId == shiftId)
+            .SumAsync(movement => (decimal?)movement.Amount, ct) ?? 0m;
+        var pending = db.ChangeTracker.Entries<CashMovement>()
+            .Where(entry => entry.State == EntityState.Added && entry.Entity.ShiftId == shiftId)
+            .Sum(entry => entry.Entity.Amount);
+        return persisted + pending;
     }
 
     public static async Task<Result> PostMovementAsync(

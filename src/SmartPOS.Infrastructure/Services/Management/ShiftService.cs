@@ -230,7 +230,7 @@ public sealed class ShiftService(
         return await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
-            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
 
             var result = await CashLedgerHelper.PostMovementAsync(
                 db, shift.Id, shift.StoreId, movementType, amount, null,
@@ -266,7 +266,7 @@ public sealed class ShiftService(
         return await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
-            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
 
             var result = await CashLedgerHelper.PostMovementAsync(
                 db, shift.Id, shift.StoreId, CashMovementType.NoSaleDrawer, 0m, "NO-SALE",
@@ -290,7 +290,7 @@ public sealed class ShiftService(
         return await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
-            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
 
             var shift = await db.Shifts.FirstOrDefaultAsync(s => s.Id == dto.ShiftId, ct);
             if (shift is null)

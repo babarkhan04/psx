@@ -7,42 +7,51 @@ using SmartPOS.Shared.Contracts;
 
 namespace SmartPOS.Infrastructure.Services.Management;
 
-public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTimeProvider clock, IStoreContext storeContext) : IDashboardService
+public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTimeProvider clock, IStoreContext storeContext, ITenantContext tenantContext, IUserContextAccessor userContext) : IDashboardService
 {
     public async Task<DashboardSummaryDto> GetSummaryAsync(CancellationToken ct = default)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
+        await using var scope = CreateReadScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await GetSummaryCoreAsync(db, ct);
+        var allowed = await scope.ServiceProvider.GetRequiredService<IStoreAccessService>().GetAllowedStoreIdsAsync(ct);
+        if (allowed.Count == 0)
+            return new DashboardSummaryDto();
+        return await GetSummaryCoreAsync(db, allowed, ct);
     }
 
     public async Task<NavStatsDto> GetNavStatsAsync(CancellationToken ct = default)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
+        await using var scope = CreateReadScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await GetNavStatsCoreAsync(db, ct);
+        var allowed = await scope.ServiceProvider.GetRequiredService<IStoreAccessService>().GetAllowedStoreIdsAsync(ct);
+        return await GetNavStatsCoreAsync(db, allowed, ct);
     }
 
     public async Task<IReadOnlyList<GlobalSearchResultDto>> SearchAsync(string query, int take = 12, CancellationToken ct = default)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
+        await using var scope = CreateReadScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        return await SearchCoreAsync(db, query, take, ct);
+        var allowed = await scope.ServiceProvider.GetRequiredService<IStoreAccessService>().GetAllowedStoreIdsAsync(ct);
+        if (allowed.Count == 0)
+            return [];
+        return await SearchCoreAsync(db, allowed, query, take, ct);
     }
 
-    private async Task<DashboardSummaryDto> GetSummaryCoreAsync(AppDbContext db, CancellationToken ct)
+    private async Task<DashboardSummaryDto> GetSummaryCoreAsync(AppDbContext db, IReadOnlyList<Guid> allowed, CancellationToken ct)
     {
         var now = clock.UtcNow;
         var todayUtc = now.Date;
         var weekStart = todayUtc.AddDays(-6);
         var selectedStoreId = storeContext.StoreId;
+        if (selectedStoreId is { } selected && !allowed.Contains(selected))
+            throw new UnauthorizedAccessException("The selected store is not accessible.");
 
         var productQuery = db.Products.AsNoTracking().AsQueryable();
-        var stockQuery = db.Stocks.AsNoTracking().AsQueryable();
-        var salesQuery = db.Sales.AsNoTracking().AsQueryable();
-        var ledgerQuery = db.StockLedgers.AsNoTracking().AsQueryable();
-        var storeQuery = db.Stores.AsNoTracking().Where(s => s.IsActive);
-        var registerQuery = db.Registers.AsNoTracking().Where(r => r.IsActive);
+        var stockQuery = db.Stocks.AsNoTracking().Where(row => allowed.Contains(row.StoreId));
+        var salesQuery = db.Sales.AsNoTracking().Where(row => allowed.Contains(row.StoreId));
+        var ledgerQuery = db.StockLedgers.AsNoTracking().Where(row => allowed.Contains(row.StoreId));
+        var storeQuery = db.Stores.AsNoTracking().Where(s => s.IsActive && allowed.Contains(s.Id));
+        var registerQuery = db.Registers.AsNoTracking().Where(r => r.IsActive && allowed.Contains(r.StoreId));
 
         if (selectedStoreId is { } storeId)
         {
@@ -63,65 +72,46 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
         var registerCount = await registerQuery.CountAsync(ct);
         var movementsToday = await ledgerQuery.CountAsync(l => l.CreatedOn >= todayUtc, ct);
 
-        var storeLookup = await db.Stores.AsNoTracking()
+        var storeLookup = await db.Stores.AsNoTracking().Where(store => allowed.Contains(store.Id))
             .Select(s => new { s.Id, Name = s.Code + " · " + s.Name })
             .ToDictionaryAsync(s => s.Id, s => s.Name, ct);
 
-        var weekSales = await salesQuery
-            .Where(s => s.Status == SaleStatus.Completed && s.CompletedOn >= weekStart)
-            .Select(s => new
-            {
-                s.Id,
-                s.StoreId,
-                s.TotalAmount,
-                s.DiscountAmount,
-                s.TaxAmount,
-                s.CompletedOn
-            })
+        var weekSales = await salesQuery.Include(sale => sale.Lines).Include(sale => sale.Payments)
+            .Where(sale => sale.Status != SaleStatus.Voided && sale.CompletedOn >= weekStart && sale.CompletedOn <= now)
             .ToListAsync(ct);
-
-        var saleIds = weekSales.Select(s => s.Id).ToList();
-
-        var saleLines = await db.SaleLines.AsNoTracking()
-            .Where(l => saleIds.Contains(l.SaleId))
-            .Select(l => new
-            {
-                l.SaleId,
-                l.Quantity,
-                l.CostPrice,
-                l.TaxAmount,
-                l.LineTotal
-            })
-            .ToListAsync(ct);
-
-        var profitBySale = saleLines
-            .GroupBy(l => l.SaleId)
-            .ToDictionary(
-                g => g.Key,
-                g => Math.Round(g.Sum(l => (l.LineTotal - l.TaxAmount) - (l.CostPrice * l.Quantity)), 2));
-
-        var todaySales = weekSales.Where(s => s.CompletedOn.Date == todayUtc).ToList();
-        var todaySalesTotal = todaySales.Sum(s => s.TotalAmount);
-        var todayTxCount = todaySales.Count;
-        var todayProfit = todaySales.Sum(s => profitBySale.GetValueOrDefault(s.Id));
-        var todayDiscounts = todaySales.Sum(s => s.DiscountAmount);
+        var returnsQuery = db.SaleReturns.AsNoTracking().Include(item => item.Lines)
+            .ThenInclude(line => line.OriginalSaleLine)
+            .Where(item => allowed.Contains(item.StoreId) && item.Status == SaleReturnStatus.Completed &&
+                item.ProcessedOn >= weekStart && item.ProcessedOn <= now);
+        if (selectedStoreId is { } returnStore)
+            returnsQuery = returnsQuery.Where(item => item.StoreId == returnStore);
+        var weekReturns = await returnsQuery.ToListAsync(ct);
+        var events = weekSales.Select(sale => new FinancialEvent(sale.StoreId, sale.CompletedOn,
+            sale.TotalAmount, sale.TotalAmount - sale.TaxAmount - sale.Lines.Sum(line => line.Quantity * line.CostPrice),
+            sale.DiscountAmount, 1)).ToList();
+        events.AddRange(weekReturns.Select(item => new FinancialEvent(item.StoreId, item.ProcessedOn,
+            -item.TotalAmount,
+            -(item.TotalAmount - item.TaxAmount) + item.Lines.Where(line => line.Restock)
+                .Sum(line => line.QuantityReturned * (line.OriginalSaleLine?.CostPrice ?? 0m)), 0m, 0)));
+        var todayEvents = events.Where(item => item.Date.Date == todayUtc).ToList();
+        var todaySalesTotal = todayEvents.Sum(item => item.Amount);
+        var todayTxCount = todayEvents.Sum(item => item.Transactions);
+        var todayProfit = todayEvents.Sum(item => item.Profit);
+        var todayDiscounts = todayEvents.Sum(item => item.Discounts);
         var todayMargin = todaySalesTotal <= 0 ? 0 : Math.Round(todayProfit / todaySalesTotal * 100m, 1);
         var averageBasket = todayTxCount == 0 ? 0 : Math.Round(todaySalesTotal / todayTxCount, 2);
-
-        var salesTrend = Enumerable.Range(0, 7)
-            .Select(offset =>
+        var salesTrend = Enumerable.Range(0, 7).Select(offset =>
+        {
+            var day = weekStart.AddDays(offset);
+            var dayEvents = events.Where(item => item.Date.Date == day).ToList();
+            return new DashboardTrendPointDto
             {
-                var day = weekStart.AddDays(offset);
-                var daySales = weekSales.Where(s => s.CompletedOn.Date == day).ToList();
-                return new DashboardTrendPointDto
-                {
-                    Label = day.ToString("ddd"),
-                    Count = daySales.Count,
-                    Amount = daySales.Sum(s => s.TotalAmount),
-                    Profit = daySales.Sum(s => profitBySale.GetValueOrDefault(s.Id))
-                };
-            })
-            .ToList();
+                Label = day.ToString("ddd"),
+                Count = dayEvents.Sum(item => item.Transactions),
+                Amount = dayEvents.Sum(item => item.Amount),
+                Profit = dayEvents.Sum(item => item.Profit)
+            };
+        }).ToList();
 
         var stockRows = await stockQuery
             .Include(s => s.Product)
@@ -186,12 +176,12 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
 
         var stockByStore = storeSnapshots.ToDictionary(s => s.StoreId, s => s);
 
-        var storePerformance = weekSales
+        var storePerformance = events
             .GroupBy(s => s.StoreId)
             .Select(g =>
             {
-                var netSales = g.Sum(x => x.TotalAmount);
-                var profit = g.Sum(x => profitBySale.GetValueOrDefault(x.Id));
+                var netSales = g.Sum(x => x.Amount);
+                var profit = g.Sum(x => x.Profit);
                 stockByStore.TryGetValue(g.Key, out var stock);
                 return new DashboardStorePerformanceDto
                 {
@@ -200,7 +190,7 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
                     NetSales = netSales,
                     GrossProfit = profit,
                     MarginPercent = netSales <= 0 ? 0 : Math.Round(profit / netSales * 100m, 1),
-                    Transactions = g.Count(),
+                    Transactions = g.Sum(x => x.Transactions),
                     InventoryValue = stock?.RetailValue ?? 0,
                     LowStockItems = stock?.LowStockItems ?? 0
                 };
@@ -220,23 +210,29 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
             });
         }
 
-        var payments = await db.Payments.AsNoTracking()
-            .Where(p => saleIds.Contains(p.SaleId))
-            .Select(p => new { p.Method, p.Amount })
-            .ToListAsync(ct);
-
-        var paymentTotal = payments.Sum(p => p.Amount);
-        var paymentMix = payments
-            .GroupBy(p => p.Method.ToString())
-            .Select(g => new DashboardPaymentMixDto
-            {
-                Method = g.Key,
-                Amount = g.Sum(x => x.Amount),
-                Count = g.Count(),
-                SharePercent = paymentTotal <= 0 ? 0 : Math.Round(g.Sum(x => x.Amount) / paymentTotal * 100m, 1)
-            })
-            .OrderByDescending(p => p.Amount)
-            .ToList();
+        var payments = weekSales.SelectMany(sale => sale.Payments)
+            .Select(payment => new PaymentEvent(payment.Method.ToString(), payment.Amount)).ToList();
+        var returnNumbers = weekReturns.Select(item => item.ReturnNumber).ToList();
+        var creditReversals = await db.CustomerLedgers.AsNoTracking()
+            .Where(entry => entry.EntryType == CustomerLedgerEntryType.Refund && entry.Reference != null &&
+                returnNumbers.Contains(entry.Reference)).ToListAsync(ct);
+        foreach (var item in weekReturns)
+        {
+            var credit = Math.Min(item.TotalAmount, Math.Max(0m,
+                -creditReversals.Where(entry => entry.Reference == item.ReturnNumber).Sum(entry => entry.Amount)));
+            if (credit > 0)
+                payments.Add(new PaymentEvent(PaymentMethod.Credit.ToString(), -credit));
+            if (item.TotalAmount > credit)
+                payments.Add(new PaymentEvent(item.RefundMethod.ToString(), -(item.TotalAmount - credit)));
+        }
+        var paymentTotal = payments.Sum(payment => payment.Amount);
+        var paymentMix = payments.GroupBy(payment => payment.Method).Select(group => new DashboardPaymentMixDto
+        {
+            Method = group.Key,
+            Amount = group.Sum(payment => payment.Amount),
+            Count = group.Count(payment => payment.Amount > 0),
+            SharePercent = paymentTotal <= 0 ? 0 : Math.Round(group.Sum(payment => payment.Amount) / paymentTotal * 100m, 1)
+        }).OrderByDescending(item => item.Amount).ToList();
 
         return new DashboardSummaryDto
         {
@@ -263,9 +259,9 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
         };
     }
 
-    private async Task<NavStatsDto> GetNavStatsCoreAsync(AppDbContext db, CancellationToken ct)
+    private async Task<NavStatsDto> GetNavStatsCoreAsync(AppDbContext db, IReadOnlyList<Guid> allowed, CancellationToken ct)
     {
-        var query = db.Stocks.AsNoTracking().Include(s => s.Product).AsQueryable();
+        var query = db.Stocks.AsNoTracking().Include(s => s.Product).Where(stock => allowed.Contains(stock.StoreId));
 
         if (storeContext.StoreId is { } storeId)
         {
@@ -278,7 +274,7 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
         return new NavStatsDto { LowStockCount = count };
     }
 
-    private async Task<IReadOnlyList<GlobalSearchResultDto>> SearchCoreAsync(AppDbContext db, string query, int take, CancellationToken ct)
+    private async Task<IReadOnlyList<GlobalSearchResultDto>> SearchCoreAsync(AppDbContext db, IReadOnlyList<Guid> allowed, string query, int take, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
@@ -355,7 +351,7 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
 
         // 5. Stores.
         var stores = await db.Stores.AsNoTracking()
-            .Where(s => s.IsActive && (
+            .Where(s => allowed.Contains(s.Id) && s.IsActive && (
                 EF.Functions.Like(s.Name, like) ||
                 EF.Functions.Like(s.Code, like)))
             .OrderBy(s => s.Name)
@@ -373,6 +369,19 @@ public sealed class DashboardService(IServiceScopeFactory scopeFactory, IDateTim
 
         return results.Take(take).ToList();
     }
+
+    private AsyncServiceScope CreateReadScope()
+    {
+        var scope = scopeFactory.CreateAsyncScope();
+        if (userContext.Principal is { } principal)
+            scope.ServiceProvider.GetRequiredService<IUserContextAccessor>().SetPrincipal(principal);
+        if (tenantContext.TenantId is { } tenantId)
+            scope.ServiceProvider.GetRequiredService<ITenantContext>().SetTenant(tenantId);
+        return scope;
+    }
+
+    private sealed record FinancialEvent(Guid StoreId, DateTime Date, decimal Amount, decimal Profit, decimal Discounts, int Transactions);
+    private sealed record PaymentEvent(string Method, decimal Amount);
 
     private sealed record NavTarget(string Title, string Path, string Icon, string Keywords);
 

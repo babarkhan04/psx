@@ -81,6 +81,21 @@ export function register(dotNetRef, shortcuts) {
     }
 
     handler = (event) => {
+        const dialogs = document.querySelectorAll('.rz-dialog');
+        if (dialogs.length) {
+            if (normalizeShortcut(event) === 'TriggerCustomerSelect') {
+                const activeDialog = dialogs[dialogs.length - 1];
+                const search = activeDialog.querySelector('[data-pos-customer-search]');
+                const action = activeDialog.querySelector('[data-pos-customer-action]');
+                if (search || (action && !action.disabled)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (search) { search.focus(); search.select(); }
+                    else action.click();
+                }
+            }
+            return;
+        }
         const method = normalizeShortcut(event);
         if (!method) return;
 

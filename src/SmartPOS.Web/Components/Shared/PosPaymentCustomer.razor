@@ -1,0 +1,39 @@
+@inject DialogService DialogService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@using SmartPOS.Domain.Customers
+
+@if (_canUse && CustomerChanged.HasDelegate)
+{
+    <button type="button" data-pos-customer-action="true" class="rz-button rz-button-light payment-customer-action" disabled="@_opening" @onclick="OpenAsync" title="Customer details and purchase history (F4)"><RadzenIcon Icon="person_add" /><span>@(_selectedId is null ? "Customer (optional)" : _name)</span><small>F4</small></button>
+}
+
+@code {
+    [Parameter] public Guid? CustomerId { get; set; }
+    [Parameter] public string CustomerName { get; set; } = "Walk-In Customer";
+    [Parameter] public EventCallback<PosCustomerSelectionDto> CustomerChanged { get; set; }
+    private Guid? _selectedId;
+    private string _name = string.Empty;
+    private bool _opening, _canUse;
+    protected override async Task OnInitializedAsync()
+    {
+        _selectedId = CustomerId; _name = CustomerName;
+        _canUse = CustomerContactRules.CanRead((await AuthenticationStateProvider.GetAuthenticationStateAsync()).User);
+    }
+    private async Task OpenAsync()
+    {
+        if (_opening) return;
+        _opening = true;
+        try
+        {
+            var result = await DialogService.OpenAsync<PosCustomerDialog>("Customer details & history", new Dictionary<string, object?> { [nameof(PosCustomerDialog.CustomerId)] = _selectedId },
+                new DialogOptions { Width = "900px", CloseDialogOnOverlayClick = false, CloseDialogOnEsc = false, ShowClose = false });
+            if (result is PosCustomerSelectionDto selection)
+            {
+                _selectedId = selection.Customer?.Id;
+                _name = selection.Customer?.Name ?? "Walk-In Customer";
+                await CustomerChanged.InvokeAsync(selection);
+            }
+        }
+        finally { _opening = false; }
+    }
+}

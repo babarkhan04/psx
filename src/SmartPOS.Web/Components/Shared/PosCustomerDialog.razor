@@ -1,0 +1,177 @@
+@inject ICustomerEngagementService Customers
+@inject DialogService DialogService
+@inject ILogger<PosCustomerDialog> Logger
+
+<div class="customer-workspace">
+    <p class="customer-optional"><RadzenIcon Icon="person_outline" /> Customer details are optional. You can continue the sale as a walk-in.</p>
+    @if (_loading)
+    {
+        <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" ShowValue="false" />
+    }
+    @if (_context is not null)
+    {
+        <div class="customer-search">
+            <input @ref="_searchInput" data-pos-customer-search="true" aria-label="Find customer by phone or name" placeholder="Enter mobile number or name…" @bind="_search" @bind:event="oninput" @onkeydown="SearchKeyDown" disabled="@_working" />
+            <RadzenButton Text="Find" Icon="search" Click="@SearchAsync" Disabled="@_working" />
+            <RadzenButton Text="New" Icon="person_add" ButtonStyle="ButtonStyle.Light" Click="@NewProfile" Disabled="@(_working || !_context.CanManage)" />
+        </div>
+        @if (_matches.Count > 0)
+        {
+            <div class="customer-matches">
+                @foreach (var match in _matches)
+                {
+                    <button type="button" @onclick="@(() => LoadProfileAsync(match.Id))" disabled="@_working"><strong>@match.Name</strong><span>@match.Phone</span><RadzenIcon Icon="chevron_right" /></button>
+                }
+            </div>
+        }
+        @if (_notice is not null) { <p class="customer-notice">@_notice</p> }
+        <RadzenTemplateForm TItem="CustomerProfileDto" Data="@_profile" Submit="@SaveAsync" @key="_profile">
+            <DataAnnotationsValidator />
+            <div class="customer-fields">
+                <RadzenFormField Text="Full name" Variant="Variant.Outlined" Style="width:100%"><RadzenTextBox @bind-Value="_profile.Name" Name="CustomerName" MaxLength="200" Disabled="@(!_context.CanManage || _working)" /></RadzenFormField>
+                <RadzenFormField Text="Mobile / cell number" Variant="Variant.Outlined" Style="width:100%"><RadzenTextBox @bind-Value="_profile.Phone" Name="CustomerMobile" MaxLength="40" Disabled="@(!_context.CanManage || _working)" /></RadzenFormField>
+                <RadzenFormField Text="Email (optional)" Variant="Variant.Outlined" Style="width:100%"><RadzenTextBox @bind-Value="_profile.Email" Name="CustomerEmail" MaxLength="200" Disabled="@(!_context.CanManage || _working)" /></RadzenFormField>
+                <RadzenFormField Text="Date of birth (optional)" Variant="Variant.Outlined" Style="width:100%"><RadzenDatePicker @bind-Value="_profile.DateOfBirth" Name="CustomerBirthday" DateFormat="dd/MM/yyyy" AllowInput="true" Max="@_context.BusinessDate" Disabled="@(!_context.CanManage || _working)" Style="width:100%" /></RadzenFormField>
+                <RadzenFormField Text="WhatsApp number (optional)" Variant="Variant.Outlined" Style="width:100%"><RadzenTextBox @bind-Value="_profile.WhatsAppNumber" Name="CustomerWhatsApp" MaxLength="40" Disabled="@(_sameWhatsApp || !_context.CanManage || _working)" /></RadzenFormField>
+                <div class="customer-check"><RadzenCheckBox @bind-Value="_sameWhatsApp" Name="SameWhatsApp" Disabled="@(!_context.CanManage || _working)" /><RadzenLabel Component="SameWhatsApp" Text="WhatsApp is the same as mobile" /></div>
+            </div>
+            <div class="customer-check customer-consent"><RadzenCheckBox @bind-Value="_profile.BirthdayEmailOptIn" Name="BirthdayConsent" Disabled="@(!_context.CanManage || _working)" /><RadzenLabel Component="BirthdayConsent" Text="Customer agrees to receive birthday emails" /></div>
+            <ValidationSummary />
+            @if (_duplicate)
+            {
+                <div class="customer-check"><RadzenCheckBox @bind-Value="_profile.AllowSharedPhone" Name="SharedPhone" /><RadzenLabel Component="SharedPhone" Text="This is a different person sharing this number; create a separate profile" /></div>
+            }
+            @if (_profile.IsBirthdayToday) { <p class="customer-birthday"><RadzenIcon Icon="cake" /> It is this customer's birthday today!</p> }
+            <div class="customer-form-actions">
+                @if (_profile.Id != Guid.Empty) { <RadzenButton Text="Use saved customer" ButtonType="ButtonType.Button" Icon="person_check" Click="@UseCustomer" Disabled="@_working" /> }
+                @if (_context.CanManage) { <RadzenButton Text="Save & use customer" Icon="save" ButtonType="ButtonType.Submit" IsBusy="@_working" Disabled="@_working" /> }
+            </div>
+        </RadzenTemplateForm>
+        @if (_profile.Id != Guid.Empty)
+        {
+            <section class="customer-history">
+                <div class="customer-history-heading"><div><h3>Purchase history</h3><p>@_history.TotalCount purchase(s) · Net spend @_history.NetSpend.ToString("C2") · accessible stores</p></div><RadzenButton Text="Refresh" Icon="refresh" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Click="@(() => LoadHistoryAsync(_history.Page))" Disabled="@_working" /></div>
+                <RadzenDataGrid Data="@_history.Purchases" TItem="CustomerPurchaseDto" AllowPaging="false" EmptyText="No purchases found in the stores you can access." AllowSorting="true">
+                    <Columns>
+                        <RadzenDataGridColumn TItem="CustomerPurchaseDto" Property="SaleNumber" Title="Invoice" Width="190px"><Template Context="sale"><RadzenButton Text="@sale.SaleNumber" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Click="@(() => ViewBillAsync(sale))" /></Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="CustomerPurchaseDto" Property="CompletedOn" Title="Date" Width="140px"><Template Context="sale">@sale.CompletedOn.ToLocalTime().ToString("dd MMM yyyy HH:mm")</Template></RadzenDataGridColumn>
+                        <RadzenDataGridColumn TItem="CustomerPurchaseDto" Property="StoreName" Title="Store" Width="140px" />
+                        <RadzenDataGridColumn TItem="CustomerPurchaseDto" Property="Total" Title="Total" FormatString="{0:C2}" Width="120px" />
+                        <RadzenDataGridColumn TItem="CustomerPurchaseDto" Property="Refunded" Title="Refunded" FormatString="{0:C2}" Width="120px" />
+                        <RadzenDataGridColumn TItem="CustomerPurchaseDto" Property="PaymentMethods" Title="Payment" Width="120px" />
+                        <RadzenDataGridColumn TItem="CustomerPurchaseDto" Property="Status" Title="Status" Width="110px" />
+                    </Columns>
+                </RadzenDataGrid>
+                <div class="customer-history-pages"><RadzenButton Text="Previous" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Disabled="@(_working || _history.Page == 0)" Click="@(() => LoadHistoryAsync(_history.Page - 1))" /><span>Page @(_history.Page + 1)</span><RadzenButton Text="Next" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Disabled="@(_working || (_history.Page + 1) * 20 >= _history.TotalCount)" Click="@(() => LoadHistoryAsync(_history.Page + 1))" /></div>
+            </section>
+        }
+    }
+    @if (_error is not null) { <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">@_error</RadzenAlert> }
+    <div class="customer-footer"><RadzenButton Text="Continue as walk-in" Icon="person_outline" ButtonStyle="ButtonStyle.Light" Click="@WalkIn" Disabled="@_working" /><RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(null))" Disabled="@_working" /></div>
+</div>
+
+@code {
+    [Parameter] public Guid? CustomerId { get; set; }
+    private CustomerEngagementContextDto? _context;
+    private CustomerProfileDto _profile = new();
+    private PosCustomerSelectionDto? _savedSelection;
+    private CustomerHistoryDto _history = new();
+    private IReadOnlyList<CustomerProfileDto> _matches = [];
+    private ElementReference _searchInput;
+    private bool _focusedSearch;
+    private string _search = string.Empty;
+    private string? _error, _notice;
+    private bool _loading = true, _working, _duplicate, _sameWhatsApp = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _context = await Customers.GetContextAsync(); if (CustomerId is { } id) await LoadProfileAsync(id); }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to open POS customer details"); _error = "Customer details are unavailable. You can continue as a walk-in or cancel."; }
+        finally { _loading = false; }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_loading && _context is not null && !_focusedSearch)
+        {
+            _focusedSearch = true;
+            await _searchInput.FocusAsync();
+        }
+    }
+    private async Task SearchKeyDown(KeyboardEventArgs e) { if (e.Key == "Enter") await SearchAsync(); }
+    private async Task SearchAsync()
+    {
+        if (_working || string.IsNullOrWhiteSpace(_search)) return;
+        _working = true; _error = null; _notice = null;
+        try
+        {
+            _matches = await Customers.FindAsync(_search);
+            if (_matches.Count == 1) await LoadProfileAsync(_matches[0].Id);
+            else if (_matches.Count == 0) { NewProfile(); _notice = "No matching customer. Add optional details below, or continue as a walk-in."; }
+            else _notice = "Select the correct customer. Shared phone numbers can have more than one profile.";
+        }
+        catch (Exception ex) { Logger.LogError(ex, "Customer search failed"); _error = "Customer search failed. Please try again."; }
+        finally { _working = false; }
+    }
+    private void NewProfile()
+    {
+        _profile = new CustomerProfileDto { Phone = _search.Any(char.IsDigit) ? _search.Trim() : string.Empty };
+        _savedSelection = null;
+        _history = new(); _sameWhatsApp = true; _duplicate = false; _error = null;
+    }
+    private async Task LoadProfileAsync(Guid id)
+    {
+        var alreadyWorking = _working;
+        _working = true;
+        _error = null;
+        _history = new();
+        _savedSelection = null;
+        try
+        {
+            var profile = await Customers.GetProfileAsync(id);
+            if (profile is null) { _error = "This customer was not found or is inactive."; return; }
+            _profile = profile; _savedSelection = Selection(profile); _duplicate = false;
+            _sameWhatsApp = string.IsNullOrWhiteSpace(profile.WhatsAppNumber) || profile.WhatsAppNumber == profile.Phone;
+            await LoadHistoryAsync(0);
+        }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to load customer profile"); _error = "The customer profile could not be loaded."; }
+        finally { _working = alreadyWorking; }
+    }
+    private async Task LoadHistoryAsync(int page)
+    {
+        try { _history = await Customers.GetHistoryAsync(_profile.Id, page); }
+        catch (UnauthorizedAccessException) { _history = new(); _notice = "Purchase history requires sales-view permission."; }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to load customer history"); _error = "Purchase history could not be loaded. Your customer selection is still available."; }
+    }
+    private async Task SaveAsync()
+    {
+        if (_working) return;
+        _working = true; _error = null;
+        try
+        {
+            if (_sameWhatsApp) _profile.WhatsAppNumber = _profile.Phone;
+            var result = await Customers.SaveProfileAsync(_profile);
+            if (!result.Succeeded) { _error = result.Error; _duplicate = result.ErrorCode == "DUPLICATE_PHONE"; return; }
+            var saved = await Customers.GetProfileAsync(result.Data);
+            if (saved is null) { _error = "Customer saved, but could not be reloaded. Find the customer by phone."; return; }
+            _profile = saved; _savedSelection = Selection(saved); UseCustomer();
+        }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to save customer profile"); _error = "Customer details could not be saved. Please try again."; }
+        finally { _working = false; }
+    }
+    private static PosCustomerSelectionDto Selection(CustomerProfileDto profile) => new() { Customer = profile.ToLookup(), IsBirthdayToday = profile.IsBirthdayToday };
+    private void UseCustomer() { if (_savedSelection is not null) DialogService.Close(_savedSelection); }
+    private void WalkIn() => DialogService.Close(new PosCustomerSelectionDto { WalkIn = true });
+    private async Task ViewBillAsync(CustomerPurchaseDto sale)
+    {
+        if (_working) return;
+        _working = true; _error = null;
+        try
+        {
+            var receipt = await Customers.GetPurchaseReceiptAsync(_profile.Id, sale.SaleId);
+            if (receipt is null) { _error = "This bill is unavailable or outside your store access."; return; }
+            await DialogService.OpenAsync<PosReceiptDialog>("Customer bill", new Dictionary<string, object?> { [nameof(PosReceiptDialog.Receipt)] = receipt, [nameof(PosReceiptDialog.Reprint)] = true }, new DialogOptions { Width = "600px", CloseDialogOnOverlayClick = false });
+        }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to show customer bill"); _error = "The bill could not be opened."; }
+        finally { _working = false; }
+    }
+}

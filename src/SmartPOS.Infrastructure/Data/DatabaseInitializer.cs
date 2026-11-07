@@ -22,7 +22,8 @@ public static class DatabaseInitializer
         var db = sp.GetRequiredService<AppDbContext>();
         var config = sp.GetRequiredService<IConfiguration>();
 
-        await db.Database.MigrateAsync();
+        if (config.GetValue<bool>("Database:ApplyMigrationsOnStartup"))
+            await db.Database.MigrateAsync();
 
         var roleManager = sp.GetRequiredService<RoleManager<IdentityRole>>();
         await EnsureRolesAndPermissionsAsync(roleManager);
@@ -34,11 +35,19 @@ public static class DatabaseInitializer
         }
 
         var seed = config.GetSection("Seed");
-        if (!seed.GetValue("Enabled", true))
+        if (!seed.GetValue("Enabled", false))
         {
             logger.LogInformation("Seeding disabled via configuration; skipping demo data.");
             return;
         }
+
+        var seedAdminPassword = seed["Admin:Password"];
+        if (string.IsNullOrWhiteSpace(seedAdminPassword) || seedAdminPassword.Length < 8)
+            throw new InvalidOperationException("Set Seed:Admin:Password explicitly before enabling database seeding.");
+        var seedCashierEnabled = seed.GetValue<bool>("Cashier:Enabled");
+        var seedCashierPassword = seed["Cashier:Password"];
+        if (seedCashierEnabled && (string.IsNullOrWhiteSpace(seedCashierPassword) || seedCashierPassword.Length < 8))
+            throw new InvalidOperationException("Set Seed:Cashier:Password explicitly before enabling the demo cashier.");
 
         // ── Tenant ───────────────────────────────────────────────────────────
         var tenant = new Tenant
@@ -305,7 +314,7 @@ public static class DatabaseInitializer
 
         var userManager = sp.GetRequiredService<UserManager<ApplicationUser>>();
         var adminEmail    = seed["Admin:Email"]       ?? "admin@smartpos.pk";
-        var adminPassword = seed["Admin:Password"]    ?? "Admin@12345";
+        var adminPassword = seedAdminPassword;
         var adminDisplay  = seed["Admin:DisplayName"] ?? "System Administrator";
 
         var adminUser = await userManager.FindByEmailAsync(adminEmail);
@@ -323,8 +332,8 @@ public static class DatabaseInitializer
             var result = await userManager.CreateAsync(adminUser, adminPassword);
             if (!result.Succeeded)
             {
-                logger.LogWarning("Failed to seed admin user: {Errors}",
-                    string.Join(", ", result.Errors.Select(e => e.Description)));
+                throw new InvalidOperationException(
+                    "Failed to seed admin user: " + string.Join(", ", result.Errors.Select(e => e.Description)));
             }
         }
 
@@ -335,8 +344,8 @@ public static class DatabaseInitializer
         );
 
         // ── Cashier demo user ─────────────────────────────────────────────────
-        const string cashierEmail = "cashier@smartpos.pk";
-        if (await userManager.FindByEmailAsync(cashierEmail) is null)
+        var cashierEmail = seed["Cashier:Email"] ?? "cashier@smartpos.pk";
+        if (seedCashierEnabled && await userManager.FindByEmailAsync(cashierEmail) is null)
         {
             var cashier = new ApplicationUser
             {
@@ -344,7 +353,7 @@ public static class DatabaseInitializer
                 EmailConfirmed = true, DisplayName = "Demo Cashier",
                 TenantId = tenant.Id, IsActive = true, CreatedOn = DateTime.UtcNow
             };
-            var cr = await userManager.CreateAsync(cashier, "Cashier@12345");
+            var cr = await userManager.CreateAsync(cashier, seedCashierPassword!);
             if (cr.Succeeded)
             {
                 await userManager.AddToRoleAsync(cashier, DefaultRolePermissions.Cashier);
@@ -361,7 +370,7 @@ public static class DatabaseInitializer
         var shiftKhi1 = new Shift
         {
             Id = Guid.NewGuid(), TenantId = tenant.Id, StoreId = storeMain.Id,
-            RegisterId = reg1.Id, ShiftNumber = $"R1-{shiftOpenedOn:yyyyMMdd}-001",
+            RegisterId = reg1.Id, ShiftNumber = $"KHI-R1-{shiftOpenedOn:yyyyMMdd}-001",
             OpenedByUserId = adminUser.Id, Status = ShiftStatus.Open,
             OpeningFloat = 10000m, OpenedOn = shiftOpenedOn,
             CreatedOn = shiftOpenedOn, CreatedBy = "system"
@@ -369,7 +378,7 @@ public static class DatabaseInitializer
         var shiftKhi2 = new Shift
         {
             Id = Guid.NewGuid(), TenantId = tenant.Id, StoreId = storeMain.Id,
-            RegisterId = reg2.Id, ShiftNumber = $"R2-{shiftOpenedOn:yyyyMMdd}-001",
+            RegisterId = reg2.Id, ShiftNumber = $"KHI-R2-{shiftOpenedOn:yyyyMMdd}-001",
             OpenedByUserId = adminUser.Id, Status = ShiftStatus.Open,
             OpeningFloat = 5000m, OpenedOn = shiftOpenedOn,
             CreatedOn = shiftOpenedOn, CreatedBy = "system"
@@ -377,7 +386,7 @@ public static class DatabaseInitializer
         var shiftLhr = new Shift
         {
             Id = Guid.NewGuid(), TenantId = tenant.Id, StoreId = storeDown.Id,
-            RegisterId = reg3.Id, ShiftNumber = $"R1-{shiftOpenedOn:yyyyMMdd}-001",
+            RegisterId = reg3.Id, ShiftNumber = $"LHR-R1-{shiftOpenedOn:yyyyMMdd}-001",
             OpenedByUserId = adminUser.Id, Status = ShiftStatus.Open,
             OpeningFloat = 8000m, OpenedOn = shiftOpenedOn,
             CreatedOn = shiftOpenedOn, CreatedBy = "system"

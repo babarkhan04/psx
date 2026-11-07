@@ -75,6 +75,8 @@ public sealed class ProductListItemDto
     public string? UnitAbbreviation { get; set; }
     public decimal CostPrice { get; set; }
     public decimal SellPrice { get; set; }
+    public decimal ReorderLevel { get; set; }
+    public string? ImageUrl { get; set; }
     public decimal? TaxRate { get; set; }
     public bool IsActive { get; set; }
     public int VariantCount { get; set; }

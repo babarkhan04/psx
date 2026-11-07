@@ -40,6 +40,7 @@ public class AppDbContext(
     public DbSet<ReceiptTemplate> ReceiptTemplates => Set<ReceiptTemplate>();
     public DbSet<PrintStationSetting> PrintStationSettings => Set<PrintStationSetting>();
     public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<CustomerBirthdayEmail> CustomerBirthdayEmails => Set<CustomerBirthdayEmail>();
     public DbSet<CustomerLedger> CustomerLedgers => Set<CustomerLedger>();
     public DbSet<Shift> Shifts => Set<Shift>();
     public DbSet<CashMovement> CashMovements => Set<CashMovement>();
@@ -415,6 +416,10 @@ public class AppDbContext(
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.Phone).HasMaxLength(40);
             entity.Property(x => x.Email).HasMaxLength(200);
+            entity.Property(x => x.NormalizedPhone).HasMaxLength(20);
+            entity.Property(x => x.WhatsAppNumber).HasMaxLength(40);
+            entity.Property(x => x.DateOfBirth).HasColumnType("date");
+            entity.HasIndex(x => new { x.TenantId, x.NormalizedPhone });
             entity.Property(x => x.AddressLine).HasMaxLength(300);
             entity.Property(x => x.City).HasMaxLength(100);
             entity.Property(x => x.Notes).HasMaxLength(500);
@@ -422,6 +427,19 @@ public class AppDbContext(
             entity.Property(x => x.Balance).HasPrecision(18, 2);
             entity.HasIndex(x => new { x.TenantId, x.Name });
             entity.HasIndex(x => new { x.TenantId, x.Phone });
+        });
+
+        builder.Entity<CustomerBirthdayEmail>(entity =>
+        {
+            entity.ToTable("CustomerBirthdayEmails");
+            entity.Property(x => x.Recipient).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Subject).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Body).HasMaxLength(5000).IsRequired();
+            entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.LastError).HasMaxLength(500);
+            entity.HasIndex(x => new { x.TenantId, x.CustomerId, x.BirthdayYear }).IsUnique();
+            entity.HasIndex(x => new { x.Status, x.CreatedOn });
+            entity.HasOne(x => x.Customer).WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<CustomerLedger>(entity =>

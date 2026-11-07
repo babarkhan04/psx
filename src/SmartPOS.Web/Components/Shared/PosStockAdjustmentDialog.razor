@@ -1,0 +1,123 @@
+@inject IInventoryService InventoryService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject DialogService DialogService
+@inject ILogger<PosStockAdjustmentDialog> Logger
+
+<div class="pos-stock-adjustment">
+    <div class="stock-adjustment-item">
+        <span class="stock-adjustment-icon"><RadzenIcon Icon="inventory_2" /></span>
+        <div><strong>@Product.Name</strong><small>@Product.Sku · @StoreName</small></div>
+    </div>
+    @if (!_canAdjust)
+    {
+        <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">An administrator account with inventory permission is required.</RadzenAlert>
+        <RadzenButton Text="Close" ButtonStyle="ButtonStyle.Light" Click="@(() => DialogService.Close(false))" />
+    }
+    else
+    {
+        <RadzenTemplateForm TItem="AdjustmentInput" Data="@_input" Submit="@PostAsync">
+            <DataAnnotationsValidator />
+            <div class="stock-adjustment-fields">
+                <div class="stock-adjustment-summary">
+                    <span>Stock shown in POS<strong>@Product.StockOnHand.ToString("0.###") @Product.UnitAbbreviation</strong></span>
+                    <span>Estimated stock after<strong>@((Product.StockOnHand + (_input.Quantity ?? 0)).ToString("0.###")) @Product.UnitAbbreviation</strong></span>
+                </div>
+                <RadzenFormField Text="Quantity to add" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenNumeric TValue="decimal?" @bind-Value="_input.Quantity" Name="QuantityToAdd" Min="@(0.001m)" Max="999999999" Format="0.###" Disabled="@_saving" Style="width:100%" />
+                </RadzenFormField>
+                <RadzenFormField Text="Reference (optional)" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextBox @bind-Value="_input.Reference" MaxLength="100" Disabled="@_saving" />
+                </RadzenFormField>
+                <RadzenFormField Text="Notes (optional)" Variant="Variant.Outlined" Style="width:100%">
+                    <RadzenTextArea @bind-Value="_input.Notes" MaxLength="500" Rows="2" Disabled="@_saving" />
+                </RadzenFormField>
+                <p class="stock-adjustment-hint">This records an adjustment for this product in the current store. Your cart stays in place.</p>
+                <ValidationSummary />
+                @if (_error is not null)
+                {
+                    <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">@_error</RadzenAlert>
+                }
+                <div class="stock-adjustment-actions">
+                    <RadzenButton Text="Cancel" ButtonType="ButtonType.Button" ButtonStyle="ButtonStyle.Light" Disabled="@_saving" Click="@(() => DialogService.Close(false))" />
+                    <RadzenButton Text="Post adjustment" Icon="save" ButtonType="ButtonType.Submit" IsBusy="@_saving" Disabled="@_saving" />
+                </div>
+            </div>
+        </RadzenTemplateForm>
+    }
+</div>
+
+@code {
+    [Parameter] public Guid StoreId { get; set; }
+    [Parameter] public string StoreName { get; set; } = string.Empty;
+    [Parameter] public PosProductDto Product { get; set; } = new();
+
+    private sealed class AdjustmentInput
+    {
+        [Required, Range(typeof(decimal), "0.001", "999999999")]
+        public decimal? Quantity { get; set; }
+        [StringLength(100)] public string? Reference { get; set; }
+        [StringLength(500)] public string? Notes { get; set; }
+    }
+
+    private readonly AdjustmentInput _input = new();
+    private bool _canAdjust;
+    private bool _saving;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() =>
+        _canAdjust = PosInventoryAccess.CanAdjustStock((await AuthenticationStateProvider.GetAuthenticationStateAsync()).User);
+
+    private async Task PostAsync()
+    {
+        if (_saving) return;
+        _saving = true;
+        _error = null;
+        try
+        {
+            if (!PosInventoryAccess.CanAdjustStock((await AuthenticationStateProvider.GetAuthenticationStateAsync()).User))
+            {
+                _canAdjust = false;
+                return;
+            }
+            if (StoreId == Guid.Empty || Product.ProductId == Guid.Empty)
+            {
+                _error = "The store or product is unavailable. Close this dialog and refresh POS.";
+                return;
+            }
+            if (_input.Quantity is not { } quantity || quantity <= 0 || quantity > 999999999m || Math.Round(quantity, 3) != quantity)
+            {
+                _error = "Enter a positive quantity with at most three decimal places.";
+                return;
+            }
+            var result = await InventoryService.PostAdjustmentAsync(new StockAdjustmentDto
+            {
+                StoreId = StoreId,
+                MovementType = "Adjustment",
+                Reference = _input.Reference?.Trim(),
+                Notes = _input.Notes?.Trim(),
+                Lines = [new StockAdjustmentLineDto
+                {
+                    ProductId = Product.ProductId,
+                    ProductVariantId = Product.VariantId,
+                    ProductName = Product.Name,
+                    QuantityChange = quantity
+                }]
+            });
+            if (result.Succeeded) DialogService.Close(true);
+            else _error = result.Error ?? "The adjustment could not be posted.";
+        }
+        catch (UnauthorizedAccessException)
+        {
+            _error = "You do not have permission to adjust stock in this store.";
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Unable to post a POS stock adjustment for {ProductId} in {StoreId}", Product.ProductId, StoreId);
+            _error = "The adjustment could not be posted. Please try again.";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

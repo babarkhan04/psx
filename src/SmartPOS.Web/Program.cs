@@ -18,6 +18,7 @@ using SmartPOS.Shared.Contracts;
 using SmartPOS.Web.Components;
 using SmartPOS.Web.Components.Account;
 using SmartPOS.Web.Services;
+using SmartPOS.Web.ReactApi;
 
 // SmartPOS is deployed in Pakistan — force PKR currency and Pakistani number
 // formatting app-wide so every ToString("C") renders as "Rs 1,234.00".
@@ -52,6 +53,7 @@ builder.Host.UseSerilog((context, services, configuration) =>
 });
 
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddHostedService<SmartPOS.Infrastructure.Services.CustomerBirthdayWorker>();
 
 builder.Services.AddAuthentication(options =>
 {
@@ -79,7 +81,6 @@ builder.Services.AddScoped<IErrorBoundaryLogger, BlazorErrorBoundaryLogger>();
 var app = builder.Build();
 
 await DatabaseInitializer.InitializeAsync(app.Services);
-
 if (!app.Environment.IsDevelopment())
 {
     app.UseHsts();
@@ -88,14 +89,53 @@ if (!app.Environment.IsDevelopment())
 app.UseSerilogRequestLogging();
 app.UseResponseCompression();
 app.UseHttpsRedirection();
+
+// Vite writes the React build to wwwroot/react at development/build time.
+// UseStaticFiles serves those runtime-generated files even when they are not
+// present in ASP.NET Core's compile-time static-assets manifest.
+app.UseStaticFiles();
+
+// Serve React's index.html for every client-side /react route.
+// This is intentionally middleware-based so Blazor's not-found route cannot
+// capture /react/dashboard, /react/pos, refreshes, or URLs with a trailing slash.
+app.MapWhen(
+    context => context.Request.Path.StartsWithSegments("/react")
+        && !Path.HasExtension(context.Request.Path.Value),
+    reactApp =>
+    {
+        reactApp.Run(async context =>
+        {
+            var indexPath = Path.Combine(
+                app.Environment.WebRootPath,
+                "react",
+                "index.html");
+
+            if (!File.Exists(indexPath))
+            {
+                context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+                context.Response.ContentType = "text/plain; charset=utf-8";
+                await context.Response.WriteAsync(
+                    "React build was not found. Run src\\SmartPOS.Web\\ClientApp\\BUILD_REACT.cmd, then restart SmartPOS.");
+                return;
+            }
+
+            context.Response.ContentType = "text/html; charset=utf-8";
+            await context.Response.SendFileAsync(indexPath);
+        });
+    });
+
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseAntiforgery();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseAntiforgery();
 
 app.MapStaticAssets();
+
+// React migration endpoints. These wrap the same application services used by Blazor.
+app.MapReactApi();
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 

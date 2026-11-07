@@ -34,6 +34,11 @@
     <div class="pos-receipt-totals">
         <div><span>Subtotal</span><span>@Receipt.Subtotal.ToString("C2")</span></div>
         <div><span>Tax</span><span>@Receipt.TaxAmount.ToString("C2")</span></div>
+        @if (Receipt.CreditReversedAmount > 0)
+        {
+            <div><span>Customer credit reversed</span><span>@Receipt.CreditReversedAmount.ToString("C2")</span></div>
+            <div><span>Settlement via @Receipt.RefundMethod</span><span>@Receipt.SettlementAmount.ToString("C2")</span></div>
+        }
         <div class="pos-total-due"><span>@(Receipt.ReturnType == "Exchange" ? "Exchange value" : "Refunded")</span><span>@Receipt.TotalAmount.ToString("C2")</span></div>
     </div>
 

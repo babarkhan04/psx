@@ -1,0 +1,51 @@
+@inject ICustomerEngagementService Customers
+@inject DialogService DialogService
+@inject ILogger<BirthdayWishDialog> Logger
+
+@if (_wish is null)
+{
+    @if (_error is null) { <RadzenProgressBar Mode="ProgressBarMode.Indeterminate" ShowValue="false" /> }
+}
+else
+{
+    <RadzenTemplateForm TItem="BirthdayWishDto" Data="@_wish" Submit="@QueueAsync">
+        <DataAnnotationsValidator />
+        <RadzenStack Gap="1rem">
+            <p style="margin:0">To: <strong>@Customer.Name</strong> · @Customer.Email</p>
+            <RadzenFormField Text="Subject" Variant="Variant.Outlined" Style="width:100%"><RadzenTextBox @bind-Value="_wish.Subject" MaxLength="200" Disabled="@_busy" /></RadzenFormField>
+            <RadzenFormField Text="Birthday message" Variant="Variant.Outlined" Style="width:100%"><RadzenTextArea @bind-Value="_wish.Body" Rows="8" MaxLength="5000" Disabled="@_busy" /></RadzenFormField>
+            @if (Customer.EmailStatus is "Uncertain" or "Failed" or "Cancelled")
+            {
+                <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">@Customer.LastError</RadzenAlert>
+                <RadzenStack Orientation="Orientation.Horizontal" AlignItems="AlignItems.Center" Gap="0.5rem"><RadzenCheckBox @bind-Value="_wish.ConfirmRetry" Name="ConfirmBirthdayRetry" Disabled="@_busy" /><RadzenLabel Text="I checked the email provider's delivery status and confirm this retry" Component="ConfirmBirthdayRetry" /></RadzenStack>
+            }
+            <ValidationSummary />
+            @if (_error is not null) { <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">@_error</RadzenAlert> }
+            <RadzenStack Orientation="Orientation.Horizontal" JustifyContent="JustifyContent.End" Gap="0.6rem" Wrap="FlexWrap.Wrap">
+                <RadzenButton Text="Cancel" ButtonType="ButtonType.Button" ButtonStyle="ButtonStyle.Light" Disabled="@_busy" Click="@(() => DialogService.Close(false))" />
+                <RadzenButton Text="Queue birthday email" Icon="send" ButtonType="ButtonType.Submit" IsBusy="@_busy" Disabled="@_busy" />
+            </RadzenStack>
+        </RadzenStack>
+    </RadzenTemplateForm>
+}
+@if (_wish is null && _error is not null) { <RadzenAlert AlertStyle="AlertStyle.Danger" AllowClose="false">@_error</RadzenAlert> }
+
+@code {
+    [Parameter] public CustomerBirthdayDto Customer { get; set; } = new();
+    private BirthdayWishDto? _wish;
+    private string? _error;
+    private bool _busy;
+    protected override async Task OnInitializedAsync()
+    {
+        try { _wish = await Customers.GetBirthdayWishAsync(Customer.CustomerId); }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to preview birthday wish"); _error = "The birthday email preview could not be loaded."; }
+    }
+    private async Task QueueAsync()
+    {
+        if (_busy || _wish is null) return;
+        _busy = true; _error = null;
+        try { var result = await Customers.QueueBirthdayWishAsync(_wish); if (result.Succeeded) DialogService.Close(true); else _error = result.Error; }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to queue birthday email"); _error = "The birthday email could not be queued. Refresh its status before retrying."; }
+        finally { _busy = false; }
+    }
+}

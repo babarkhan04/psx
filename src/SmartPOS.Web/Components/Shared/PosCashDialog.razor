@@ -13,7 +13,8 @@
         <span>Change</span>
         <strong class="@(Change >= 0 ? "text-ok" : "text-warn")">@Change.ToString("C2")</strong>
     </div>
-    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End">
+    <RadzenStack Orientation="Orientation.Horizontal" Gap="0.5rem" JustifyContent="JustifyContent.End" Wrap="FlexWrap.Wrap">
+        <PosPaymentCustomer CustomerId="@CustomerId" CustomerName="@CustomerName" CustomerChanged="@CustomerChanged" />
         <RadzenButton Text="Cancel" ButtonStyle="ButtonStyle.Light" Click="@Cancel" />
         <RadzenButton Text="Complete sale" Icon="check" ButtonStyle="ButtonStyle.Primary"
                       Disabled="@(Change < 0)" Click="@Confirm" />
@@ -22,12 +23,16 @@
 
 @code {
     [Parameter] public decimal Total { get; set; }
+    [Parameter] public Guid? CustomerId { get; set; }
+    [Parameter] public string CustomerName { get; set; } = "Walk-In Customer";
+    [Parameter] public EventCallback<PosCustomerSelectionDto> CustomerChanged { get; set; }
 
     private decimal _tendered;
 
     private decimal Change => _tendered - Total;
 
-    protected override void OnParametersSet() => _tendered = Total;
+    private bool _initialized;
+    protected override void OnParametersSet() { if (!_initialized) { _tendered = Total; _initialized = true; } }
 
     private void Cancel() => DialogService.Close(null);
 

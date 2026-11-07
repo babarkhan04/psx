@@ -1,0 +1,52 @@
+@inject ICustomerEngagementService Customers
+@inject DialogService DialogService
+@inject ILogger<CustomerBirthdayAlerts> Logger
+
+@if (_context?.CanViewBirthdays == true)
+{
+    <section class="birthday-panel">
+        <div class="birthday-heading"><div><h3><RadzenIcon Icon="cake" /> Customer birthdays</h3><p>@_rows.Count(c => c.IsToday) today · @_rows.Count in the next 7 days · @_context.TimeZoneId</p></div><RadzenButton Text="Refresh" Icon="refresh" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Disabled="@_busy" Click="@RefreshAsync" /></div>
+        @if (!_context.EmailConfigured) { <p class="birthday-note">Email delivery is not configured yet. Birthday alerts remain available.</p> }
+        @if (_error is not null) { <RadzenAlert AlertStyle="AlertStyle.Warning" AllowClose="false">@_error</RadzenAlert> }
+        @if (_notice is not null) { <p class="birthday-note">@_notice</p> }
+        <RadzenDataGrid Data="@_rows" TItem="CustomerBirthdayDto" AllowPaging="true" PageSize="5" AllowSorting="true" EmptyText="No customer birthdays in the next seven days." IsLoading="@_busy">
+            <Columns>
+                <RadzenDataGridColumn TItem="CustomerBirthdayDto" Property="Name" Title="Customer" Width="180px" />
+                <RadzenDataGridColumn TItem="CustomerBirthdayDto" Property="Birthday" Title="Birthday" Width="130px"><Template Context="row">@(row.IsToday ? "Today" : row.Birthday.ToString("dd MMM"))</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="CustomerBirthdayDto" Property="Phone" Title="Mobile" Width="150px" />
+                <RadzenDataGridColumn TItem="CustomerBirthdayDto" Property="Email" Title="Email" Width="200px" />
+                <RadzenDataGridColumn TItem="CustomerBirthdayDto" Title="Email status" Width="150px"><Template Context="row">@(!row.OptedIn ? "Opted out" : row.EmailStatus == "Uncertain" ? "Check delivery" : row.EmailStatus)</Template></RadzenDataGridColumn>
+                <RadzenDataGridColumn TItem="CustomerBirthdayDto" Title="Wish" Width="160px"><Template Context="row"><RadzenButton Text="Preview email" Icon="mail_outline" Size="ButtonSize.Small" ButtonStyle="ButtonStyle.Light" Disabled="@(!CanSend(row) || _busy)" Click="@(() => PreviewAsync(row))" /></Template></RadzenDataGridColumn>
+            </Columns>
+        </RadzenDataGrid>
+        <p class="birthday-note">Birthday wishes are available on the birthday for customers who agreed to receive them. A 29 February birthday is observed on 28 February in a non-leap year.</p>
+    </section>
+}
+
+@code {
+    private CustomerEngagementContextDto? _context;
+    private IReadOnlyList<CustomerBirthdayDto> _rows = [];
+    private string? _error, _notice;
+    private bool _busy;
+    protected override async Task OnInitializedAsync()
+    {
+        try { _context = await Customers.GetContextAsync(); if (_context.CanViewBirthdays) await RefreshAsync(); }
+        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to initialize birthday alerts"); }
+    }
+    private bool CanSend(CustomerBirthdayDto row) => _context?.CanSendBirthdayEmails == true && _context.EmailConfigured && row.IsToday && row.OptedIn && !string.IsNullOrWhiteSpace(row.Email) && row.EmailStatus is not ("Sent" or "Queued" or "Sending");
+    private async Task RefreshAsync()
+    {
+        if (_busy) return;
+        _busy = true; _error = null;
+        try { _rows = await Customers.GetBirthdaysAsync(); }
+        catch (Exception ex) { Logger.LogError(ex, "Unable to load birthday alerts"); _error = "Birthday alerts could not be refreshed."; }
+        finally { _busy = false; }
+    }
+    private async Task PreviewAsync(CustomerBirthdayDto row)
+    {
+        if (!CanSend(row)) return;
+        var sent = await DialogService.OpenAsync<BirthdayWishDialog>("Birthday email preview", new Dictionary<string, object?> { [nameof(BirthdayWishDialog.Customer)] = row }, new DialogOptions { Width = "650px", CloseDialogOnOverlayClick = false });
+        if (sent is true) { _notice = "Birthday wish queued. Refresh to check its delivery status."; await RefreshAsync(); }
+    }
+}

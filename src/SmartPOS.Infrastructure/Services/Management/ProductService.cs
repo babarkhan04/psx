@@ -1,3 +1,5 @@
+using System.Data;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.EntityFrameworkCore;
 using SmartPOS.Application.Common.Interfaces;
 using SmartPOS.Application.Common.Models;
@@ -7,10 +9,25 @@ using SmartPOS.Shared.Contracts;
 
 namespace SmartPOS.Infrastructure.Services.Management;
 
-public sealed class ProductService(AppDbContext db) : IProductService
+public sealed class ProductService(AppDbContext db, IStoreAccessService storeAccess, ITenantContext tenantContext, DbContextGate gate) : IProductService
 {
+    public Task<Result<Guid>> CreateAsync(ProductDto dto, CancellationToken ct = default) =>
+        gate.ExecuteAsync(() => CreateCoreAsync(dto, ct), ct);
+    public Task<Result> UpdateAsync(ProductDto dto, CancellationToken ct = default) =>
+        gate.ExecuteAsync(() => UpdateCoreAsync(dto, ct), ct);
+    public Task<Result> SetActiveAsync(Guid id, bool isActive, CancellationToken ct = default) =>
+        gate.ExecuteAsync(() => SetActiveCoreAsync(id, isActive, ct), ct);
+    public Task<Result> DeleteAsync(Guid id, CancellationToken ct = default) =>
+        gate.ExecuteAsync(() => DeleteCoreAsync(id, ct), ct);
+    public Task<Result> AssignProductsToStoreAsync(IReadOnlyList<Guid> productIds, Guid storeId, bool isVisible, CancellationToken ct = default) =>
+        gate.ExecuteAsync(() => AssignProductsToStoreCoreAsync(productIds, storeId, isVisible, ct), ct);
+
     public async Task<IReadOnlyList<ProductListItemDto>> GetAllAsync(string? search = null, Guid? storeId = null, bool assignedOnly = false, CancellationToken ct = default)
     {
+        if ((await storeAccess.GetAllowedStoreIdsAsync(ct)).Count == 0)
+            throw new UnauthorizedAccessException("No accessible store is available.");
+        if (storeId is { } requestedStore)
+            await storeAccess.EnsureCanAccessStoreAsync(requestedStore, ct);
         var query = db.Products.AsNoTracking()
             .Include(p => p.Category)
             .Include(p => p.Brand)
@@ -46,6 +63,8 @@ public sealed class ProductService(AppDbContext db) : IProductService
                 UnitAbbreviation = p.Unit != null ? p.Unit.Abbreviation : null,
                 CostPrice = p.CostPrice,
                 SellPrice = p.SellPrice,
+                ReorderLevel = p.ReorderLevel,
+                ImageUrl = p.ImageUrl,
                 TaxRate = p.TaxCategory != null ? p.TaxCategory.Rate : (decimal?)null,
                 IsActive = p.IsActive,
                 VariantCount = p.Variants.Count(v => !v.IsDeleted),
@@ -68,83 +87,85 @@ public sealed class ProductService(AppDbContext db) : IProductService
             return null;
         }
 
-        return MapToDto(product);
+        var allowed = (await storeAccess.GetAllowedStoreIdsAsync(ct)).ToHashSet();
+        var result = MapToDto(product);
+        result.StorePrices = result.StorePrices.Where(price => allowed.Contains(price.StoreId)).ToList();
+        result.StoreAssignments = result.StoreAssignments.Where(assignment => allowed.Contains(assignment.StoreId)).ToList();
+        return result;
     }
 
-    public async Task<Result<Guid>> CreateAsync(ProductDto dto, CancellationToken ct = default)
+    private async Task<Result<Guid>> CreateCoreAsync(ProductDto dto, CancellationToken ct)
     {
-        var sku = dto.Sku.Trim();
-        if (await db.Products.IgnoreQueryFilters().AnyAsync(p => p.Sku == sku && !p.IsDeleted, ct))
-        {
-            return Result<Guid>.Failure($"A product with SKU '{sku}' already exists.", "DUPLICATE_SKU");
-        }
-
-        var validationError = await ValidateAsync(dto, null, ct);
-        if (validationError is not null)
-        {
-            return Result<Guid>.Failure(validationError, "VALIDATION");
-        }
-
-        var product = new Product();
-        Apply(product, dto);
-        SyncBarcodes(product, dto);
-
-        // Two SaveChanges needed: first to get product.Id (for FK in prices/variants),
-        // then for the dependents. Wrap in strategy so both are retried atomically.
+        var validation = await ValidateAsync(dto, null, ct);
+        if (validation is not null)
+            return Result<Guid>.Failure(validation, "VALIDATION");
+        var tenantId = tenantContext.TenantId!.Value;
         var strategy = db.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+            var sku = dto.Sku.Trim();
+            if (await db.Products.IgnoreQueryFilters().AnyAsync(p => p.TenantId == tenantId && p.Sku == sku, ct))
+                return Result<Guid>.Failure($"SKU '{sku}' already exists, including archived products.", "DUPLICATE_SKU");
+            var product = new Product { TenantId = tenantId };
+            Apply(product, dto);
+            SyncBarcodes(product, dto);
             db.Products.Add(product);
+            await SyncStorePricesAsync(product.Id, tenantId, dto.StorePrices, ct);
+            await SyncStoreAssignmentsAsync(product.Id, tenantId, dto.StoreAssignments, ct);
+            await SyncVariantsAsync(product.Id, tenantId, dto, ct);
             await db.SaveChangesAsync(ct);
-
-            await SyncStorePricesAsync(product.Id, product.TenantId, dto.StorePrices, ct);
-            await SyncStoreAssignmentsAsync(product.Id, product.TenantId, dto.StoreAssignments, ct);
-            await SyncVariantsAsync(product.Id, product.TenantId, dto, ct);
-            await db.SaveChangesAsync(ct);
-
+            await tx.CommitAsync(ct);
             return Result<Guid>.Success(product.Id);
         });
     }
 
-    public async Task<Result> UpdateAsync(ProductDto dto, CancellationToken ct = default)
+    private async Task<Result> UpdateCoreAsync(ProductDto dto, CancellationToken ct)
     {
-        // Blazor Server reuses the scoped DbContext per circuit — clear stale tracked
-        // entities so Include() reloads navigation collections (e.g. store prices).
-        db.ChangeTracker.Clear();
-
-        var product = await db.Products
-            .Include(p => p.Barcodes)
-            .FirstOrDefaultAsync(p => p.Id == dto.Id, ct);
-
-        if (product is null)
+        var initialValidation = await ValidateAsync(dto, dto.Id, ct);
+        if (initialValidation is not null)
+            return Result.Failure(initialValidation, "VALIDATION");
+        var strategy = db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            return Result.Failure("Product not found.", "NOT_FOUND");
-        }
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+            db.ChangeTracker.Clear();
 
-        var sku = dto.Sku.Trim();
-        if (await db.Products.IgnoreQueryFilters().AnyAsync(p => p.Sku == sku && p.Id != dto.Id && !p.IsDeleted, ct))
-        {
-            return Result.Failure($"A product with SKU '{sku}' already exists.", "DUPLICATE_SKU");
-        }
+            var product = await db.Products
+                .Include(p => p.Barcodes)
+                .FirstOrDefaultAsync(p => p.Id == dto.Id, ct);
 
-        var validationError = await ValidateAsync(dto, dto.Id, ct);
-        if (validationError is not null)
-        {
-            return Result.Failure(validationError, "VALIDATION");
-        }
+            if (product is null)
+            {
+                return Result.Failure("Product not found.", "NOT_FOUND");
+            }
 
-        Apply(product, dto);
-        SyncBarcodes(product, dto);
-        await SyncStorePricesAsync(product.Id, product.TenantId, dto.StorePrices, ct);
-        await SyncStoreAssignmentsAsync(product.Id, product.TenantId, dto.StoreAssignments, ct);
-        await SyncVariantsAsync(product.Id, product.TenantId, dto, ct);
+            var sku = dto.Sku.Trim();
+            if (await db.Products.IgnoreQueryFilters().AnyAsync(p => p.TenantId == tenantContext.TenantId && p.Sku == sku && p.Id != dto.Id, ct))
+            {
+                return Result.Failure($"A product with SKU '{sku}' already exists.", "DUPLICATE_SKU");
+            }
 
-        await db.SaveChangesAsync(ct);
-        return Result.Success();
+            var validationError = await ValidateAsync(dto, dto.Id, ct);
+            if (validationError is not null)
+            {
+                return Result.Failure(validationError, "VALIDATION");
+            }
+
+            Apply(product, dto);
+            SyncBarcodes(product, dto);
+            await SyncStorePricesAsync(product.Id, product.TenantId, dto.StorePrices, ct);
+            await SyncStoreAssignmentsAsync(product.Id, product.TenantId, dto.StoreAssignments, ct);
+            await SyncVariantsAsync(product.Id, product.TenantId, dto, ct);
+
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+            return Result.Success();
+        });
     }
 
-    public async Task<Result> SetActiveAsync(Guid id, bool isActive, CancellationToken ct = default)
+    private async Task<Result> SetActiveCoreAsync(Guid id, bool isActive, CancellationToken ct = default)
     {
         db.ChangeTracker.Clear();
         var product = await db.Products.FirstOrDefaultAsync(p => p.Id == id, ct);
@@ -158,7 +179,7 @@ public sealed class ProductService(AppDbContext db) : IProductService
         return Result.Success();
     }
 
-    public async Task<Result> DeleteAsync(Guid id, CancellationToken ct = default)
+    private async Task<Result> DeleteCoreAsync(Guid id, CancellationToken ct = default)
     {
         db.ChangeTracker.Clear();
         var product = await db.Products.FirstOrDefaultAsync(p => p.Id == id, ct);
@@ -172,8 +193,9 @@ public sealed class ProductService(AppDbContext db) : IProductService
         return Result.Success();
     }
 
-    public async Task<Result> AssignProductsToStoreAsync(IReadOnlyList<Guid> productIds, Guid storeId, bool isVisible, CancellationToken ct = default)
+    private async Task<Result> AssignProductsToStoreCoreAsync(IReadOnlyList<Guid> productIds, Guid storeId, bool isVisible, CancellationToken ct = default)
     {
+        await storeAccess.EnsureCanAccessStoreAsync(storeId, ct);
         if (productIds.Count == 0)
         {
             return Result.Failure("No products selected for store assignment.", "NO_PRODUCTS");
@@ -187,9 +209,11 @@ public sealed class ProductService(AppDbContext db) : IProductService
 
         var tenantId = store.TenantId;
         var ids = productIds.Distinct().ToList();
+        if (await db.Products.CountAsync(product => ids.Contains(product.Id), ct) != ids.Count)
+            return Result.Failure("One or more products do not belong to the active company.", "INVALID_PRODUCT");
         var existing = await db.ProductStoreAssignments
             .IgnoreQueryFilters()
-            .Where(a => a.StoreId == storeId && ids.Contains(a.ProductId))
+            .Where(a => a.TenantId == tenantId && a.StoreId == storeId && ids.Contains(a.ProductId))
             .ToListAsync(ct);
 
         foreach (var row in existing)
@@ -285,6 +309,7 @@ public sealed class ProductService(AppDbContext db) : IProductService
         var desired = dto.AdditionalBarcodes
             .Select(NormalizeBarcode)
             .Where(b => !string.IsNullOrWhiteSpace(b))
+            .OfType<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList()!;
 
@@ -313,9 +338,10 @@ public sealed class ProductService(AppDbContext db) : IProductService
             .Where(sp => sp.Price.HasValue)
             .ToDictionary(sp => sp.StoreId, sp => sp.Price!.Value);
 
+        var allowed = await storeAccess.GetAllowedStoreIdsAsync(ct);
         var existing = await db.ProductPrices
             .IgnoreQueryFilters()
-            .Where(pp => pp.ProductId == productId)
+            .Where(pp => pp.TenantId == tenantId && pp.ProductId == productId && allowed.Contains(pp.StoreId))
             .ToListAsync(ct);
 
         foreach (var row in existing)
@@ -358,9 +384,10 @@ public sealed class ProductService(AppDbContext db) : IProductService
             .GroupBy(a => a.StoreId)
             .ToDictionary(g => g.Key, g => g.Last().IsVisibleOnPos);
 
+        var allowed = await storeAccess.GetAllowedStoreIdsAsync(ct);
         var existing = await db.ProductStoreAssignments
             .IgnoreQueryFilters()
-            .Where(a => a.ProductId == productId)
+            .Where(a => a.TenantId == tenantId && a.ProductId == productId && allowed.Contains(a.StoreId))
             .ToListAsync(ct);
 
         foreach (var row in existing)
@@ -402,7 +429,7 @@ public sealed class ProductService(AppDbContext db) : IProductService
 
         var existing = await db.ProductVariants
             .IgnoreQueryFilters()
-            .Where(v => v.ProductId == productId)
+            .Where(v => v.TenantId == tenantId && v.ProductId == productId)
             .ToListAsync(ct);
 
         var keepIds = desired.Where(v => v.Id != Guid.Empty).Select(v => v.Id).ToHashSet();
@@ -447,6 +474,34 @@ public sealed class ProductService(AppDbContext db) : IProductService
 
     private async Task<string?> ValidateAsync(ProductDto dto, Guid? productId, CancellationToken ct)
     {
+        if (tenantContext.TenantId is null || (await storeAccess.GetAllowedStoreIdsAsync(ct)).Count == 0)
+            return "No accessible company or store is available.";
+        dto.StorePrices ??= [];
+        dto.StoreAssignments ??= [];
+        dto.Variants ??= [];
+        dto.AdditionalBarcodes ??= [];
+        var errors = new List<ValidationResult>();
+        if (!Validator.TryValidateObject(dto, new ValidationContext(dto), errors, true))
+            return errors.First().ErrorMessage;
+        var allowed = (await storeAccess.GetAllowedStoreIdsAsync(ct)).ToHashSet();
+        if (dto.StorePrices.Any(price => !allowed.Contains(price.StoreId)) ||
+            dto.StoreAssignments.Any(assignment => !allowed.Contains(assignment.StoreId)))
+            return "You cannot change prices or availability for an unassigned store.";
+        if (dto.StorePrices.GroupBy(price => price.StoreId).Any(group => group.Count() > 1) ||
+            dto.StorePrices.Any(price => price.Price is < 0 or > 9999999m))
+            return "Store prices must be unique per store and between zero and 9,999,999.";
+        if (dto.CategoryId is { } categoryId && !await db.Categories.AnyAsync(x => x.Id == categoryId, ct) ||
+            dto.BrandId is { } brandId && !await db.Brands.AnyAsync(x => x.Id == brandId, ct) ||
+            dto.UnitId is { } unitId && !await db.Units.AnyAsync(x => x.Id == unitId, ct) ||
+            dto.TaxCategoryId is { } taxId && !await db.TaxCategories.AnyAsync(x => x.Id == taxId, ct))
+            return "A selected catalog value does not belong to the active company.";
+        foreach (var variant in dto.Variants)
+        {
+            if (variant is null || !Validator.TryValidateObject(variant, new ValidationContext(variant), errors, true) ||
+                variant.CostPrice is < 0 or > 9999999m || variant.SellPrice is < 0 or > 9999999m)
+                return "Enter a valid SKU, name, and non-negative prices for every variant.";
+        }
+
         var barcodeError = await ValidateBarcodesAsync(dto, productId, ct);
         if (barcodeError is not null)
         {
@@ -466,7 +521,7 @@ public sealed class ProductService(AppDbContext db) : IProductService
         foreach (var sku in variantSkus)
         {
             if (await db.ProductVariants.IgnoreQueryFilters()
-                    .AnyAsync(v => v.Sku == sku && v.ProductId != productId && !v.IsDeleted, ct))
+                    .AnyAsync(v => v.TenantId == tenantContext.TenantId && v.Sku == sku && v.ProductId != productId, ct))
             {
                 return $"Variant SKU '{sku}' is already used by another product.";
             }
@@ -515,7 +570,7 @@ public sealed class ProductService(AppDbContext db) : IProductService
 
         // Product primary barcodes must not clash with another product.
         var productClash = await db.Products.IgnoreQueryFilters().AsNoTracking()
-            .Where(p => p.Id != productId && !p.IsDeleted && p.Barcode != null && codes.Contains(p.Barcode))
+            .Where(p => p.TenantId == tenantContext.TenantId && p.Id != productId && !p.IsDeleted && p.Barcode != null && codes.Contains(p.Barcode))
             .Select(p => new { p.Sku, p.Name, Code = p.Barcode! })
             .FirstOrDefaultAsync(ct);
 
@@ -526,7 +581,7 @@ public sealed class ProductService(AppDbContext db) : IProductService
 
         // Additional barcode clashes must also be detected.
         var additionalClash = await db.ProductBarcodes.IgnoreQueryFilters().AsNoTracking()
-            .Where(b => b.ProductId != productId && !b.IsDeleted && codes.Contains(b.Code))
+            .Where(b => b.TenantId == tenantContext.TenantId && b.ProductId != productId && !b.IsDeleted && codes.Contains(b.Code))
             .Select(b => new { b.Code, ProductSku = b.Product != null ? b.Product.Sku : "Unknown", ProductName = b.Product != null ? b.Product.Name : "Unknown" })
             .FirstOrDefaultAsync(ct);
 
@@ -537,7 +592,7 @@ public sealed class ProductService(AppDbContext db) : IProductService
 
         // Variant barcode clashes must be detected too, otherwise scanning can return the wrong item.
         var variantClash = await db.ProductVariants.IgnoreQueryFilters().AsNoTracking()
-            .Where(v => v.ProductId != productId && !v.IsDeleted && v.Barcode != null && codes.Contains(v.Barcode))
+            .Where(v => v.TenantId == tenantContext.TenantId && v.ProductId != productId && !v.IsDeleted && v.Barcode != null && codes.Contains(v.Barcode))
             .Select(v => new
             {
                 Code = v.Barcode!,

@@ -1,3 +1,5 @@
+using System.Data;
+using SmartPOS.Domain.Customers;
 using Microsoft.EntityFrameworkCore;
 using SmartPOS.Application.Common.Interfaces;
 using SmartPOS.Application.Common.Models;
@@ -71,9 +73,11 @@ public sealed class CustomerService(AppDbContext db, IDateTimeProvider clock, Db
             if (!string.IsNullOrWhiteSpace(term))
             {
                 var like = $"%{term.Trim()}%";
+                var normalized = CustomerContactRules.NormalizePhone(term);
                 query = query.Where(c =>
                     EF.Functions.Like(c.Name, like) ||
-                    (c.Phone != null && EF.Functions.Like(c.Phone, like)));
+                    (c.Phone != null && EF.Functions.Like(c.Phone, like)) ||
+                    (normalized != null && c.NormalizedPhone == normalized));
             }
 
             return (IReadOnlyList<CustomerLookupDto>)await query
@@ -107,6 +111,7 @@ public sealed class CustomerService(AppDbContext db, IDateTimeProvider clock, Db
                 {
                     Name = name,
                     Phone = dto.Phone?.Trim(),
+                    NormalizedPhone = CustomerContactRules.NormalizePhone(dto.Phone),
                     Email = dto.Email?.Trim(),
                     AddressLine = dto.AddressLine?.Trim(),
                     City = dto.City?.Trim(),
@@ -149,6 +154,7 @@ public sealed class CustomerService(AppDbContext db, IDateTimeProvider clock, Db
 
             customer.Name = dto.Name.Trim();
             customer.Phone = dto.Phone?.Trim();
+            customer.NormalizedPhone = CustomerContactRules.NormalizePhone(dto.Phone);
             customer.Email = dto.Email?.Trim();
             customer.AddressLine = dto.AddressLine?.Trim();
             customer.City = dto.City?.Trim();
@@ -211,7 +217,7 @@ public sealed class CustomerService(AppDbContext db, IDateTimeProvider clock, Db
             return await strategy.ExecuteAsync(async () =>
             {
                 db.ChangeTracker.Clear();
-                await using var tx = await db.Database.BeginTransactionAsync(ct);
+                await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
 
                 var customer = await db.Customers.FirstOrDefaultAsync(x => x.Id == dto.CustomerId, ct);
                 if (customer is null)

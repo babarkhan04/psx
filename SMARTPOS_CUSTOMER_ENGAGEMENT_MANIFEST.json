@@ -1,0 +1,160 @@
+{
+  "patch": "SmartPOS optional POS customer engagement",
+  "date": "2026-10-30",
+  "base": "After previously supplied backend, pricing, reports and admin stock patches",
+  "schema_script": "database/customer-engagement/01_CustomerEngagement.sql",
+  "files": [
+    {
+      "path": "SMARTPOS_CUSTOMER_ENGAGEMENT_README.md",
+      "sha256": "9c3d03b05ea09c86afe5c639d09db98e5181643c5406216779ae4f57f700f0e9"
+    },
+    {
+      "path": "SmartPOS.slnx",
+      "sha256": "57cb77ec829460878a561858eb3686f938846a288620363b1217fdf4b500a7fa"
+    },
+    {
+      "path": "database/customer-engagement/01_CustomerEngagement.sql",
+      "sha256": "53791ba7ddf543e0aaeb823d7b1f7d6e1a292ffb01da9875fb42d946f459aaa9"
+    },
+    {
+      "path": "database/customer-engagement/02_VerifyCustomerEngagement.sql",
+      "sha256": "fa20931ba2a426a0902320933cf8b5db095f6d638335f0b26733ea16a3a6af1f"
+    },
+    {
+      "path": "database/customer-engagement/appsettings.CustomerEngagement.example.json",
+      "sha256": "ea225c08559aa6cc6a8653db9987e80a92029b4e63da571ffe2e4d7edfe9f7f7"
+    },
+    {
+      "path": "src/SmartPOS.Application/Common/Interfaces/ICustomerEngagementService.cs",
+      "sha256": "3e705f16cc917d7ea2e4b3cad07859c36541acdbd847f6af17c4a9fc15dca933"
+    },
+    {
+      "path": "src/SmartPOS.Application/Common/Options/CustomerEngagementOptions.cs",
+      "sha256": "5bf661d161a877130fdb786c5e1e43147f1d54151f345692ab7cc4c74b73fb97"
+    },
+    {
+      "path": "src/SmartPOS.Domain/Customers/CustomerContactRules.cs",
+      "sha256": "9558d0d62bf97be321eb2ec39766817d17ff714bbd3b40e67aa58f46e75db02e"
+    },
+    {
+      "path": "src/SmartPOS.Domain/Entities/Customer.cs",
+      "sha256": "b1ba0c7baa00970ead993b4ade0bc81ba1dfcbdc8b31a4c15ba0e8024329672d"
+    },
+    {
+      "path": "src/SmartPOS.Domain/Entities/CustomerBirthdayEmail.cs",
+      "sha256": "9f58d73f0540657ea88e1dc06acb9b3f0b9948558cb7e92015ced51680c3f974"
+    },
+    {
+      "path": "src/SmartPOS.Infrastructure/Data/DatabaseInitializer.cs",
+      "sha256": "1ea8ceb1ee017711dbb3ff2ba34453bf75ab12dc277a248949c29a30f7a96675"
+    },
+    {
+      "path": "src/SmartPOS.Infrastructure/DependencyInjection.cs",
+      "sha256": "6b7442553313dba633580afd748235503b47c50161236bb8713ed0e66e9a918c"
+    },
+    {
+      "path": "src/SmartPOS.Infrastructure/Persistence/AppDbContext.cs",
+      "sha256": "500a7c37c66cadb054e480557aa66b6d7d7f21c1072d04457b379a4fab6f60ef"
+    },
+    {
+      "path": "src/SmartPOS.Infrastructure/Services/CustomerBirthdayWorker.cs",
+      "sha256": "fc606aa24832ef22cb7a4f872e7156b2175ee8acc46780272614984975d263e8"
+    },
+    {
+      "path": "src/SmartPOS.Infrastructure/Services/Management/CustomerEngagementService.cs",
+      "sha256": "63a647546714192c410b99c7a68786065c32d7b835e48071a5bd115bc73d259e"
+    },
+    {
+      "path": "src/SmartPOS.Infrastructure/Services/Management/CustomerService.cs",
+      "sha256": "d4317337e77231301bf745102aed3faea53a3c8899f9a87e127ec7e5f86093e1"
+    },
+    {
+      "path": "src/SmartPOS.Shared/Contracts/CustomerEngagementDtos.cs",
+      "sha256": "681efe586d1c91cbcb823f555f843749119102ac9f845dabf9f290a16eaaaa1e"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Dashboard.razor",
+      "sha256": "4e21ae9076a333353d6747641cc83920c0a9dd5dda22edb3f93c6e8fb7ce29e2"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Pos.CustomerEngagement.cs",
+      "sha256": "539b7b4b12d970983ad3695c2bf112eb0ce05a9ce95a3c6565804b3af6615d20"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Pos.razor",
+      "sha256": "936aec8ec829e20688294e4f3328307618a5a9d0ab9993f3041085cd145e42c2"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Pos.razor.css",
+      "sha256": "7a4049854f2fbda06682b65d5671e9f59186d0a35a8498d946be1e7ed612eb83"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/BirthdayWishDialog.razor",
+      "sha256": "22830a496d03607c7d9a96f99a7fb2849802306b3e120f830e7942970afe3d62"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/CustomerBirthdayAlerts.razor",
+      "sha256": "f840bb6865268d0726f4f918102c98b43a95a1d98041c4ad4abb7c0c084e97f1"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/CustomerBirthdayAlerts.razor.css",
+      "sha256": "92214e8a2f1a856d27481f85d2e92fde5d49d866cf71a64fcbd2ec16082b8e23"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/CustomerBirthdaysDialog.razor",
+      "sha256": "c16d5aa84e16c41d3abb70261dd5fcac9cbdc3efef6cab4fe4bd1f4804575e4a"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosCashDialog.razor",
+      "sha256": "21dd37c990b3b654eedd3ce618a2943a5f80f30cffcf8c9e78baa9c85b315de9"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosCustomerDialog.razor",
+      "sha256": "39af552e4ea0d3fbd1470cfd53848784aaeb9a5f7fda10cc8c65b3885bfa789b"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosCustomerDialog.razor.css",
+      "sha256": "cee9e5c655e045a50bd5dc8a9552c27215656ac78e625742fbce67ced951fd39"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosPaymentCustomer.razor",
+      "sha256": "cce0c9e56d5d6ffe38b56e5f5ffa09ce1a425cd74ca8ca700d90794af1a2f246"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosPaymentCustomer.razor.css",
+      "sha256": "0ac42fe866ee837e83728b965828dd6ed89a5e1af376a5164188e9597c6ea32e"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosSplitPaymentDialog.razor",
+      "sha256": "9a631ddc7743104d98e962b138274b981d254bdb48002077658fc1a6bb37492f"
+    },
+    {
+      "path": "src/SmartPOS.Web/Program.cs",
+      "sha256": "4de126d179bad1d59bc523c055f0141178d31f52253e6e53810ba793012e02bb"
+    },
+    {
+      "path": "src/SmartPOS.Web/wwwroot/pos-keyboard.js",
+      "sha256": "e3bf541504e2ebc91eced2ea895648e881bb7d61a66a6411dd2ae91094b2169c"
+    },
+    {
+      "path": "src/SmartPOS.Worker/Program.cs",
+      "sha256": "7c36498c9da113314ba062534977d8e6b7ff389f53c25a14a56738eb3f5a4d0c"
+    },
+    {
+      "path": "tests/SmartPOS.Tests/CustomerEngagementTests.cs",
+      "sha256": "d1d6287b5296cdd1d0212dc72557b6483a940d8dd7ecf1fae9b7da58f755b20a"
+    },
+    {
+      "path": "tests/SmartPOS.UiTests/CustomerEngagementUiTests.cs",
+      "sha256": "3bde83479a8de942fb8a3ee78986455e6e5a472078bdaaccb39fe6a3b82059b2"
+    },
+    {
+      "path": "tests/SmartPOS.UiTests/SmartPOS.UiTests.csproj",
+      "sha256": "6902d63864523a3aae733caadf4011db1919e06f3ece855af85f93b555ceed1d"
+    },
+    {
+      "path": "tests/browser/pos-keyboard.customer.test.mjs",
+      "sha256": "e8ad2c63d5606c3e8b222163f629ae0e2286a51bd7284f22b4a75b14582ef1ee"
+    }
+  ]
+}

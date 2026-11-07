@@ -1,0 +1,18 @@
+{
+  "patch": "SmartPOS product pricing and form UX",
+  "base_patch": "SmartPOS_Backend_Blazor_Fixes_20261023.zip",
+  "files": [
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/ProductDialog.razor",
+      "sha256": "4333bb554e40deede3c732afc2eac1678b18ef736c60edd570a7135543258f25"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/ProductDialog.razor.css",
+      "sha256": "37d7e60dc4eb07292ad1c6a85db9da4ddce007fa8c0cd08faf401164bda8fffc"
+    },
+    {
+      "path": "tests/SmartPOS.Tests/PosRegressionTests.cs",
+      "sha256": "41d38e06d0383b92e4600d2fc00d8eaf2458c621995ae962c22f65a2ce5bed37"
+    }
+  ]
+}

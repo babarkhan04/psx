@@ -1,0 +1,10 @@
+.pos-product-tile.out-of-stock.pos-stock-adjustable { cursor: pointer; opacity: .85; border: 1px dashed var(--sp-warning); }
+.pos-product-tile.out-of-stock.pos-stock-adjustable:hover { opacity: 1; border-color: var(--sp-warning); }
+.pos-stock-shortcut { display: inline-flex; align-items: center; gap: .25rem; margin-top: .4rem; font-size: .75rem; font-weight: 600; color: #a16207; }
+.pos-stock-shortcut ::deep .rzi { font-size: 1rem; }
+
+.pos-customer-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; padding: .75rem; border-top: 1px solid var(--sp-border); background: var(--sp-surface); }
+.pos-customer-actions > button { display: inline-flex; align-items: center; gap: .4rem; font-size: .8rem; text-transform: none; }
+.pos-customer-actions small { font-size: .65rem; opacity: .7; }
+.pos-customer-note { color: var(--sp-text-muted); font-size: .75rem; }
+.pos-birthday-note { display: inline-flex; align-items: center; gap: .3rem; color: #a8498a; font-size: .75rem; }

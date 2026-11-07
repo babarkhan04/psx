@@ -10,5 +10,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SmartPOS.Tests/SmartPOS.Tests.csproj" />
+    <Project Path="tests/SmartPOS.UiTests/SmartPOS.UiTests.csproj" />
   </Folder>
 </Solution>

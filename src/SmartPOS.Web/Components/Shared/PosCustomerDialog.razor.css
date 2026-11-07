@@ -1,0 +1,22 @@
+.customer-workspace { display: grid; gap: 1rem; }
+.customer-optional { display: flex; gap: .5rem; align-items: center; margin: 0; color: var(--sp-text-muted); font-size: .85rem; }
+.customer-search { display: flex; gap: .5rem; }
+.customer-search input { min-width: 0; flex: 1; padding: .75rem; border: 1px solid var(--sp-border); border-radius: 8px; color: var(--sp-text); font: inherit; }
+.customer-search input:focus-visible { outline: 2px solid var(--sp-primary); }
+.customer-matches { display: grid; gap: .35rem; max-height: 200px; overflow-y: auto; }
+.customer-matches button { display: flex; align-items: center; gap: .7rem; border: 1px solid var(--sp-border); border-radius: 7px; background: var(--sp-surface-2); padding: .7rem; cursor: pointer; text-align: left; color: var(--sp-text); }
+.customer-matches button span { color: var(--sp-text-muted); margin-left: auto; }
+.customer-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.customer-check { display: flex; gap: .6rem; align-items: center; font-size: .8rem; }
+.customer-consent { margin: 1rem 0; }
+.customer-form-actions, .customer-footer { display: flex; gap: .6rem; flex-wrap: wrap; justify-content: flex-end; }
+.customer-form-actions { margin-top: 1rem; }
+.customer-footer { padding-top: 1rem; border-top: 1px solid var(--sp-border); }
+.customer-footer ::deep button:first-child { margin-right: auto; }
+.customer-history { border-top: 1px solid var(--sp-border); padding-top: 1rem; min-width: 0; }
+.customer-history-heading { display: flex; gap: 1rem; justify-content: space-between; align-items: center; margin-bottom: .8rem; }
+.customer-history h3 { font-size: 1rem; margin: 0; }
+.customer-history p, .customer-notice { color: var(--sp-text-muted); font-size: .8rem; margin: .35rem 0 0; }
+.customer-history-pages { display: flex; justify-content: flex-end; align-items: center; gap: .7rem; margin-top: .75rem; font-size: .8rem; }
+.customer-birthday { color: #9d4787; display: flex; align-items: center; gap: .5rem; }
+@media (max-width: 600px) { .customer-fields { grid-template-columns: minmax(0, 1fr); } .customer-search { flex-wrap: wrap; } .customer-search input { flex-basis: 100%; } .customer-optional { align-items: flex-start; line-height: 1.5; } .customer-history-heading { flex-wrap: wrap; } }

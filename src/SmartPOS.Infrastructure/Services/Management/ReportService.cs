@@ -1,6 +1,7 @@
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using SmartPOS.Application.Common.Interfaces;
+using SmartPOS.Application.Sales;
 using SmartPOS.Domain.Entities;
 using SmartPOS.Domain.Enums;
 using SmartPOS.Infrastructure.Persistence;
@@ -8,8 +9,9 @@ using SmartPOS.Shared.Contracts;
 
 namespace SmartPOS.Infrastructure.Services.Management;
 
-public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReportService
+public sealed partial class ReportService(AppDbContext db, DbContextGate gate, IStoreAccessService storeAccess) : IReportService
 {
+    private IReadOnlyList<Guid> reportStoreIds = [];
     public Task<ReportsPageDto> GetReportsAsync(ReportQueryDto query, CancellationToken ct = default) =>
         gate.ExecuteAsync(() => GetReportsCoreAsync(query, ct), ct);
 
@@ -18,6 +20,9 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
 
     private async Task<ReportsPageDto> GetReportsCoreAsync(ReportQueryDto query, CancellationToken ct)
     {
+        reportStoreIds = await storeAccess.GetAllowedStoreIdsAsync(ct);
+        if (query.StoreId is { } requestedStore)
+            await storeAccess.EnsureCanAccessStoreAsync(requestedStore, ct);
         var fromUtc = query.FromUtc ?? DateTime.UtcNow.Date.AddDays(-29);
         var toUtc = query.ToUtc ?? DateTime.UtcNow.Date.AddDays(1);
 
@@ -26,17 +31,17 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
             toUtc = fromUtc.AddDays(1);
         }
 
-        var stores = await db.Stores.AsNoTracking().ToListAsync(ct);
+        var stores = await db.Stores.AsNoTracking().Where(store => reportStoreIds.Contains(store.Id)).ToListAsync(ct);
         var storesById = stores.ToDictionary(s => s.Id, s => FormatStore(s));
 
-        var registers = await db.Registers.AsNoTracking().ToListAsync(ct);
+        var registers = await db.Registers.AsNoTracking().Where(register => reportStoreIds.Contains(register.StoreId)).ToListAsync(ct);
         var registersById = registers.ToDictionary(r => r.Id, r => r);
 
         var usersById = await db.Users.AsNoTracking()
             .Select(u => new { u.Id, Name = string.IsNullOrWhiteSpace(u.DisplayName) ? (u.Email ?? u.UserName ?? u.Id) : u.DisplayName })
             .ToDictionaryAsync(u => u.Id, u => u.Name, ct);
 
-        var salesQuery = db.Sales.AsNoTracking()
+        var salesQuery = db.Sales.AsNoTracking().Where(sale => reportStoreIds.Contains(sale.StoreId))
             .Include(s => s.Lines)
             .Include(s => s.Payments)
             .Where(s => s.CompletedOn >= fromUtc && s.CompletedOn < toUtc);
@@ -50,8 +55,8 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         var activeSales = sales.Where(s => s.Status != SaleStatus.Voided).ToList();
         var voidSales = sales.Where(s => s.Status == SaleStatus.Voided).ToList();
 
-        var returnsQuery = db.SaleReturns.AsNoTracking()
-            .Include(r => r.Lines)
+        var returnsQuery = db.SaleReturns.AsNoTracking().Where(item => reportStoreIds.Contains(item.StoreId))
+            .Include(r => r.Lines).ThenInclude(line => line.OriginalSaleLine)
             .Where(r => r.ProcessedOn >= fromUtc && r.ProcessedOn < toUtc && r.Status == SaleReturnStatus.Completed);
 
         if (query.StoreId is { } storeId2)
@@ -68,7 +73,9 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         var productsById = products.ToDictionary(p => p.Id, p => p);
 
         var stockRows = await BuildCurrentStockAsync(query.StoreId, productsById, storesById, ct);
-        var stockMovementRows = await BuildStockMovementSummaryAsync(query.StoreId, fromUtc, toUtc, ct);
+        var stockLedgerRows = await BuildStockLedgerAsync(query.StoreId, fromUtc, toUtc, storesById, ct);
+        var stockMovementRows = BuildMovementSummary(stockLedgerRows);
+        var purchaseRows = await BuildPurchaseRegisterAsync(query.StoreId, fromUtc, toUtc, storesById, ct);
         var stockTransferRows = await BuildStockTransferReportAsync(query.StoreId, fromUtc, toUtc, storesById, ct);
 
         var saleLines = activeSales.SelectMany(s => s.Lines.Select(l => new SaleLineWithHeader(s, l))).ToList();
@@ -80,7 +87,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         var grossSales = activeSales.Sum(s => s.TotalAmount);
         var returnTotal = returns.Sum(r => r.TotalAmount);
         var netSales = grossSales - returnTotal;
-        var discountTotal = activeSales.Sum(s => s.DiscountAmount) + saleLines.Sum(x => x.Line.DiscountAmount);
+        var discountTotal = activeSales.Sum(s => s.DiscountAmount);
         var taxCollected = activeSales.Sum(s => s.TaxAmount) - returns.Sum(r => r.TaxAmount);
         var payments = activeSales.SelectMany(s => s.Payments).ToList();
         var paymentTotal = payments.Sum(p => p.Amount);
@@ -106,6 +113,12 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
 
         return new ReportsPageDto
         {
+            SalesRegister = BuildSalesRegister(sales, returns, storesById, usersById),
+            PurchaseRegister = purchaseRows,
+            StockLedger = stockLedgerRows,
+            SlowMovingStock = BuildSlowMovingStock(stockRows, activeSales, fromUtc, toUtc),
+            WeekdaySales = BuildWeekdaySales(activeSales, returns, fromUtc, toUtc),
+            ProductPerformance = productStats.OrderByDescending(p => p.Revenue).ToList(),
             SalesSummary = summary,
             DailySales = BuildDailySales(activeSales, voidSales, returns, productStats),
             SalesByStore = BuildStoreSales(activeSales, returns, productStats, storesById),
@@ -123,7 +136,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
             StockMovements = stockMovementRows,
             StockTransfers = stockTransferRows,
             Tax = BuildTaxReport(saleLines, taxCollected, activeSales),
-            Purchases = await BuildPurchaseReportAsync(query.StoreId, fromUtc, toUtc, ct),
+            Purchases = BuildPurchaseSummary(purchaseRows),
             Customers = await BuildCustomerReportAsync(activeSales, returns, ct),
             Shifts = await BuildShiftReportAsync(query.StoreId, fromUtc, toUtc, registersById, storesById, usersById, ct)
         };
@@ -135,7 +148,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         IReadOnlyDictionary<Guid, string> storesById,
         CancellationToken ct)
     {
-        var stockQuery = db.Stocks.AsNoTracking().AsQueryable();
+        var stockQuery = db.Stocks.AsNoTracking().Include(stock => stock.ProductVariant).Where(stock => reportStoreIds.Contains(stock.StoreId));
         if (storeId is { } id)
         {
             stockQuery = stockQuery.Where(s => s.StoreId == id);
@@ -145,13 +158,16 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         return stocks.Select(s =>
             {
                 productsById.TryGetValue(s.ProductId, out var product);
-                var cost = product?.CostPrice ?? 0m;
+                var cost = s.ProductVariant?.CostPrice ?? product?.CostPrice ?? 0m;
                 var reorder = product?.ReorderLevel ?? 0m;
                 return new CurrentStockRowDto
                 {
+                    StoreId = s.StoreId,
+                    ProductId = s.ProductId,
+                    ProductVariantId = s.ProductVariantId,
                     StoreName = storesById.TryGetValue(s.StoreId, out var storeName) ? storeName : "Unknown store",
-                    Sku = product?.Sku ?? string.Empty,
-                    ProductName = product?.Name ?? "Unknown product",
+                    Sku = s.ProductVariant?.Sku ?? product?.Sku ?? string.Empty,
+                    ProductName = s.ProductVariant is null ? product?.Name ?? "Unknown product" : $"{product?.Name} · {s.ProductVariant.Name}",
                     CategoryName = product?.Category?.Name ?? "Uncategorized",
                     BrandName = product?.Brand?.Name ?? "No brand",
                     QuantityOnHand = s.QuantityOnHand,
@@ -169,35 +185,6 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
             .ToList();
     }
 
-    private async Task<IReadOnlyList<StockMovementSummaryRowDto>> BuildStockMovementSummaryAsync(
-        Guid? storeId,
-        DateTime fromUtc,
-        DateTime toUtc,
-        CancellationToken ct)
-    {
-        var query = db.StockLedgers.AsNoTracking()
-            .Where(l => l.CreatedOn >= fromUtc && l.CreatedOn < toUtc);
-
-        if (storeId is { } id)
-        {
-            query = query.Where(l => l.StoreId == id);
-        }
-
-        var ledgers = await query.ToListAsync(ct);
-        return ledgers
-            .GroupBy(l => l.MovementType)
-            .Select(g => new StockMovementSummaryRowDto
-            {
-                MovementType = g.Key.ToString(),
-                MovementCount = g.Count(),
-                QuantityIn = g.Where(x => x.QuantityChange > 0).Sum(x => x.QuantityChange),
-                QuantityOut = Math.Abs(g.Where(x => x.QuantityChange < 0).Sum(x => x.QuantityChange)),
-                NetQuantity = g.Sum(x => x.QuantityChange)
-            })
-            .OrderByDescending(x => x.MovementCount)
-            .ToList();
-    }
-
     private async Task<IReadOnlyList<StockTransferReportRowDto>> BuildStockTransferReportAsync(
         Guid? storeId,
         DateTime fromUtc,
@@ -205,7 +192,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         IReadOnlyDictionary<Guid, string> storesById,
         CancellationToken ct)
     {
-        var query = db.StockTransfers.AsNoTracking()
+        var query = db.StockTransfers.AsNoTracking().Where(transfer => reportStoreIds.Contains(transfer.StoreId) || reportStoreIds.Contains(transfer.DestinationStoreId))
             .Include(t => t.Lines)
             .Where(t => t.RequestedOn >= fromUtc && t.RequestedOn < toUtc);
 
@@ -235,39 +222,40 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         IReadOnlyList<ReturnLineWithHeader> returnLines,
         IReadOnlyDictionary<Guid, Product> productsById)
     {
-        return saleLines
-            .GroupBy(x => new { x.Line.ProductId, x.Line.Sku, x.Line.ProductName })
-            .Select(g =>
+        var allocations = saleLines.Select(item => item.Sale).DistinctBy(sale => sale.Id)
+            .ToDictionary(sale => sale.Id, SaleFinancials.GetRefundableLines);
+        var keys = saleLines.Select(item => (item.Line.ProductId, item.Line.Sku))
+            .Concat(returnLines.Select(item => (item.Line.ProductId, item.Line.Sku))).Distinct();
+        return keys.Select(key =>
+        {
+            var sold = saleLines.Where(item => item.Line.ProductId == key.ProductId && item.Line.Sku == key.Sku).ToList();
+            var returned = returnLines.Where(item => item.Line.ProductId == key.ProductId && item.Line.Sku == key.Sku).ToList();
+            var quantitySold = sold.Sum(item => item.Line.Quantity);
+            var quantityReturned = returned.Sum(item => item.Line.QuantityReturned);
+            var revenue = sold.Sum(item => allocations[item.Sale.Id][item.Line.Id].Total) - returned.Sum(item => item.Line.LineTotal);
+            var tax = sold.Sum(item => allocations[item.Sale.Id][item.Line.Id].Tax) - returned.Sum(item => item.Line.TaxAmount);
+            var cost = sold.Sum(item => item.Line.Quantity * item.Line.CostPrice) - returned.Where(item => item.Line.Restock)
+                .Sum(item => item.Line.QuantityReturned * (item.Line.OriginalSaleLine?.CostPrice ?? 0m));
+            var profit = revenue - tax - cost;
+            productsById.TryGetValue(key.ProductId, out var product);
+            return new ProductSalesRowDto
             {
-                var returnedLines = returnLines.Where(r => r.Line.ProductId == g.Key.ProductId).ToList();
-                var quantitySold = g.Sum(x => x.Line.Quantity);
-                var quantityReturned = returnedLines.Sum(r => r.Line.QuantityReturned);
-                var netQty = quantitySold - quantityReturned;
-                var revenue = g.Sum(x => x.Line.LineTotal) - returnedLines.Sum(r => r.Line.LineTotal);
-                var avgCost = g.Any() ? g.Average(x => x.Line.CostPrice) : 0m;
-                var cost = netQty * avgCost;
-                var profit = revenue - cost;
-                productsById.TryGetValue(g.Key.ProductId, out var product);
-
-                return new ProductSalesRowDto
-                {
-                    ProductId = g.Key.ProductId,
-                    Sku = g.Key.Sku,
-                    ProductName = g.Key.ProductName,
-                    CategoryName = product?.Category?.Name ?? "Uncategorized",
-                    BrandName = product?.Brand?.Name ?? "No brand",
-                    QuantitySold = quantitySold,
-                    QuantityReturned = quantityReturned,
-                    NetQuantity = netQty,
-                    Revenue = revenue,
-                    Cost = cost,
-                    GrossProfit = profit,
-                    MarginPercent = SafePercent(profit, revenue),
-                    DiscountAmount = g.Sum(x => x.Line.DiscountAmount)
-                };
-            })
-            .Where(p => p.QuantitySold != 0 || p.QuantityReturned != 0 || p.Revenue != 0)
-            .ToList();
+                ProductId = key.ProductId,
+                Sku = key.Sku,
+                ProductName = sold.OrderByDescending(item => item.Sale.CompletedOn).FirstOrDefault()?.Line.ProductName
+                    ?? returned.FirstOrDefault()?.Line.ProductName ?? product?.Name ?? "Unknown product",
+                CategoryName = product?.Category?.Name ?? "Uncategorized",
+                BrandName = product?.Brand?.Name ?? "No brand",
+                QuantitySold = quantitySold,
+                QuantityReturned = quantityReturned,
+                NetQuantity = quantitySold - quantityReturned,
+                Revenue = revenue,
+                Cost = cost,
+                GrossProfit = profit,
+                MarginPercent = SafePercent(profit, revenue),
+                DiscountAmount = sold.Sum(item => item.Line.DiscountAmount)
+            };
+        }).Where(item => item.QuantitySold != 0 || item.QuantityReturned != 0 || item.Revenue != 0).ToList();
     }
 
     private static IReadOnlyList<DailySalesRowDto> BuildDailySales(
@@ -293,7 +281,10 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
             var net = gross - returned;
             var dayLines = daySales.SelectMany(s => s.Lines).ToList();
             var cost = dayLines.Sum(l => l.Quantity * l.CostPrice);
-            var profit = net - cost;
+            var returnedCost = dayReturns.SelectMany(item => item.Lines).Where(line => line.Restock)
+                .Sum(line => line.QuantityReturned * (line.OriginalSaleLine?.CostPrice ?? 0m));
+            var netTax = daySales.Sum(sale => sale.TaxAmount) - dayReturns.Sum(item => item.TaxAmount);
+            var profit = net - netTax - cost + returnedCost;
             return new DailySalesRowDto
             {
                 Date = date,
@@ -301,7 +292,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
                 ReturnsCount = dayReturns.Count,
                 VoidCount = dayVoidCount,
                 GrossSales = gross,
-                Discounts = daySales.Sum(s => s.DiscountAmount) + dayLines.Sum(l => l.DiscountAmount),
+                Discounts = daySales.Sum(s => s.DiscountAmount),
                 Returns = returned,
                 NetSales = net,
                 Tax = daySales.Sum(s => s.TaxAmount) - dayReturns.Sum(r => r.TaxAmount),
@@ -325,7 +316,11 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
                 var gross = g.Sum(s => s.TotalAmount);
                 var net = gross - storeReturns;
                 var lineCost = g.SelectMany(s => s.Lines).Sum(l => l.Quantity * l.CostPrice);
-                var profit = net - lineCost;
+                var returnRows = returns.Where(item => item.StoreId == g.Key).ToList();
+                var returnedCost = returnRows.SelectMany(item => item.Lines).Where(line => line.Restock)
+                    .Sum(line => line.QuantityReturned * (line.OriginalSaleLine?.CostPrice ?? 0m));
+                var tax = g.Sum(sale => sale.TaxAmount) - returnRows.Sum(item => item.TaxAmount);
+                var profit = net - tax - lineCost + returnedCost;
                 return new StoreSalesRowDto
                 {
                     StoreId = g.Key,
@@ -334,7 +329,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
                     GrossSales = gross,
                     Returns = storeReturns,
                     NetSales = net,
-                    Discounts = g.Sum(s => s.DiscountAmount) + g.SelectMany(s => s.Lines).Sum(l => l.DiscountAmount),
+                    Discounts = g.Sum(s => s.DiscountAmount),
                     GrossProfit = profit,
                     MarginPercent = SafePercent(profit, net),
                     AverageBasket = g.Count() == 0 ? 0 : net / g.Count()
@@ -390,7 +385,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
                     VoidCount = voidSales.Count(s => s.CashierUserId == g.Key),
                     ReturnCount = returns.Count(r => r.ProcessedByUserId == g.Key),
                     GrossSales = gross,
-                    Discounts = g.Sum(s => s.DiscountAmount) + g.SelectMany(s => s.Lines).Sum(l => l.DiscountAmount),
+                    Discounts = g.Sum(s => s.DiscountAmount),
                     Returns = returned,
                     NetSales = net,
                     AverageBasket = g.Count() == 0 ? 0 : net / g.Count()
@@ -483,7 +478,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
             {
                 Sale = s,
                 LineDiscount = s.Lines.Sum(l => l.DiscountAmount),
-                InvoiceDiscount = s.DiscountAmount
+                InvoiceDiscount = Math.Max(0m, s.DiscountAmount - s.Lines.Sum(line => line.DiscountAmount))
             })
             .Where(x => x.LineDiscount > 0 || x.InvoiceDiscount > 0)
             .Select(x => new DiscountReportRowDto
@@ -567,40 +562,6 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         };
     }
 
-    private async Task<PurchaseReportSummaryDto> BuildPurchaseReportAsync(
-        Guid? storeId,
-        DateTime fromUtc,
-        DateTime toUtc,
-        CancellationToken ct)
-    {
-        var query = db.Purchases.AsNoTracking()
-            .Include(p => p.Supplier)
-            .Where(p => p.Status == PurchaseStatus.Received && p.ReceivedOn >= fromUtc && p.ReceivedOn < toUtc);
-
-        if (storeId is { } id)
-        {
-            query = query.Where(p => p.StoreId == id);
-        }
-
-        var purchases = await query.ToListAsync(ct);
-        return new PurchaseReportSummaryDto
-        {
-            PurchaseCount = purchases.Count,
-            TotalPurchased = purchases.Sum(p => p.TotalAmount),
-            TotalTax = purchases.Sum(p => p.TaxAmount),
-            BySupplier = purchases
-                .GroupBy(p => p.Supplier?.Name ?? "Unknown supplier")
-                .Select(g => new PurchaseSupplierRowDto
-                {
-                    SupplierName = g.Key,
-                    PurchaseCount = g.Count(),
-                    TotalAmount = g.Sum(p => p.TotalAmount)
-                })
-                .OrderByDescending(s => s.TotalAmount)
-                .ToList()
-        };
-    }
-
     private async Task<IReadOnlyList<CustomerReportRowDto>> BuildCustomerReportAsync(
         IReadOnlyList<Sale> activeSales,
         IReadOnlyList<SaleReturn> returns,
@@ -642,7 +603,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         IReadOnlyDictionary<string, string> usersById,
         CancellationToken ct)
     {
-        var query = db.Shifts.AsNoTracking()
+        var query = db.Shifts.AsNoTracking().Where(shift => reportStoreIds.Contains(shift.StoreId))
             .Where(s => s.OpenedOn >= fromUtc && s.OpenedOn < toUtc);
 
         if (storeId is { } id)
@@ -692,6 +653,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
         AddShiftWorksheet(workbook, report);
         AddCustomerWorksheet(workbook, report);
         AddTaxPurchaseWorksheet(workbook, report);
+        AddAnalyticsWorksheets(workbook, report);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
@@ -765,7 +727,7 @@ public sealed class ReportService(AppDbContext db, DbContextGate gate) : IReport
     private static void AddProductProfitWorksheet(XLWorkbook workbook, ReportsPageDto report) =>
         WriteTable(workbook.Worksheets.Add("Product Profit"),
             ["SKU", "Product", "Category", "Brand", "Qty Sold", "Qty Returned", "Net Qty", "Revenue", "Cost", "Gross Profit", "Margin %", "Discount"],
-            report.TopProducts,
+            report.ProductPerformance,
             r => [r.Sku, r.ProductName, r.CategoryName, r.BrandName, r.QuantitySold, r.QuantityReturned, r.NetQuantity, r.Revenue, r.Cost, r.GrossProfit, r.MarginPercent, r.DiscountAmount]);
 
     private static void AddPaymentWorksheet(XLWorkbook workbook, ReportsPageDto report) =>

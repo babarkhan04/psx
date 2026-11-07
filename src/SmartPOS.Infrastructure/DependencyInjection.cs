@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SmartPOS.Application;
+using SmartPOS.Application.Common.Options;
 using SmartPOS.Application.Common.Interfaces;
 using SmartPOS.Infrastructure.Authorization;
 using SmartPOS.Infrastructure.ExceptionHandling;
@@ -22,6 +23,11 @@ public static class DependencyInjection
         IConfiguration configuration)
     {
         services.AddApplication();
+        services.Configure<CustomerEngagementOptions>(configuration.GetSection("CustomerEngagement"));
+        services.AddScoped<ICustomerEngagementService, CustomerEngagementService>();
+        services.AddScoped<ICustomerEmailSender, CustomerSmtpSender>();
+        services.AddScoped<CustomerBirthdayDispatcher>();
+        services.Configure<PosSecurityOptions>(configuration.GetSection("PosSecurity"));
         services.AddHttpContextAccessor();
 
         services.AddScoped<IUserContextAccessor, UserContextAccessor>();

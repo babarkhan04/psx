@@ -236,7 +236,7 @@ public sealed class PurchaseService(
         return await strategy.ExecuteAsync(async () =>
         {
             db.ChangeTracker.Clear();
-            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
 
             var purchase = await db.Purchases
                 .Include(p => p.Lines)

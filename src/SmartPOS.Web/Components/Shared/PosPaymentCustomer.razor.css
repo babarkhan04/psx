@@ -1,0 +1,3 @@
+.payment-customer-action { display: inline-flex; gap: .4rem; align-items: center; text-transform: none; max-width: 100%; }
+.payment-customer-action span { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.payment-customer-action small { font-size: .65rem; opacity: .7; }

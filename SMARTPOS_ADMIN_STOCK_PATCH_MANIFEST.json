@@ -1,0 +1,37 @@
+{
+  "patch": "SmartPOS administrator POS stock adjustment shortcut",
+  "files": [
+    {
+      "path": "src/SmartPOS.Domain/Authorization/PosInventoryAccess.cs",
+      "sha256": "c7c67213729265aa35d60a59be352d324bcc91e570780a21a00324af73cdf625"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Pos.razor",
+      "sha256": "9ffdaf93ca7aec28dd0a2e3865663552494ee29b6964e72aefb49b0b997a2fcb"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Pages/Pos.razor.css",
+      "sha256": "18c37042defb42e33c6c29b1907da7c0e8bd0dbb8d6ff96ee769aa131d7ffcb0"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosStockAdjustmentDialog.razor",
+      "sha256": "da4b6216774cad2b75ec0d8df27d292a05fd07eb362e7ac56437408e5d8c9a72"
+    },
+    {
+      "path": "src/SmartPOS.Web/Components/Shared/PosStockAdjustmentDialog.razor.css",
+      "sha256": "69b783925242fe7ec43c03a8dc79ae854f0254bfd09f78d99b3bda504498a3c1"
+    },
+    {
+      "path": "src/SmartPOS.Web/wwwroot/pos-keyboard.js",
+      "sha256": "bd167880d618219f5d7a1d2c3ad115107bc43c991a7bd0e873b8e94c7082ae72"
+    },
+    {
+      "path": "tests/SmartPOS.Tests/PosInventoryAccessTests.cs",
+      "sha256": "962a4f96efcd12ce6e4cba79cf8353070654aa728eb362746e54883b0aa93bc4"
+    },
+    {
+      "path": "tests/SmartPOS.Tests/PosStockAdjustmentRegressionTests.cs",
+      "sha256": "5c181eaae3d9aa34f402b94b0c3f853729d088ffd60174706a7082621f6e988e"
+    }
+  ]
+}

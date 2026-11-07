@@ -4,7 +4,7 @@ namespace SmartPOS.Infrastructure.Persistence;
 /// Serializes EF operations per Blazor circuit so a single scoped <see cref="AppDbContext"/>
 /// is never used concurrently (layout + page init often overlap).
 /// </summary>
-public sealed class DbContextGate
+public sealed class DbContextGate(AppDbContext db)
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
@@ -17,7 +17,14 @@ public sealed class DbContextGate
         }
         finally
         {
-            _semaphore.Release();
+            try
+            {
+                db.ChangeTracker.Clear();
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
         }
     }
 
@@ -30,7 +37,14 @@ public sealed class DbContextGate
         }
         finally
         {
-            _semaphore.Release();
+            try
+            {
+                db.ChangeTracker.Clear();
+            }
+            finally
+            {
+                _semaphore.Release();
+            }
         }
     }
 }

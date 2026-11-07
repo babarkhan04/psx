@@ -1,4 +1,5 @@
 @page "/pos"
+@using SmartPOS.Domain.Customers
 @layout PosLayout
 @attribute [Authorize(Policy = Permissions.Sales.Operate)]
 @implements IAsyncDisposable
@@ -12,6 +13,8 @@
 @inject DialogService DialogService
 @inject NotificationService Notifications
 @inject IJSRuntime Js
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject ILogger<Pos> Logger
 
 <PageTitle>Point of Sale · SmartPOS</PageTitle>
 
@@ -96,7 +99,8 @@ else
                     <div class="pos-favorite-buttons">
                         @foreach (var fav in FavoriteProducts.Take(8))
                         {
-                            <button type="button" class="pos-favorite-button" disabled="@(fav.IsOutOfStock || _busy)" @onclick="() => AddProduct(fav)">
+                            <button type="button" class="pos-favorite-button" disabled="@(_busy || (fav.IsOutOfStock && !_canAdjustStock))"
+                                    title="@(fav.IsOutOfStock && _canAdjustStock ? $"Adjust stock for {fav.Name}" : fav.Name)" @onclick="() => OnProductClickedAsync(fav)">
                                 <span>@fav.Name</span>
                                 <strong>@fav.UnitPrice.ToString("C0")</strong>
                             </button>
@@ -177,6 +181,12 @@ else
                                   Title="Clear cart" Disabled="@(_cart.Count == 0 || _busy)" Click="@ClearCart" />
                 </div>
             </div>
+            <div class="pos-customer-actions">
+                <button type="button" data-pos-customer-action="true" class="rz-button rz-button-light" disabled="@(_busy || !_canUseCustomerForm)" @onclick="OpenCustomerFormAsync"><RadzenIcon Icon="person_add" /><span>Customer details / history</span><small>F4</small></button>
+                @if (_canSeeBirthdays) { <RadzenButton Text="Birthdays" Icon="cake" ButtonStyle="ButtonStyle.Light" Size="ButtonSize.Small" Disabled="@_busy" Click="@OpenBirthdaysAsync" /> }
+                <span class="pos-customer-note">@(_selectedCustomer is null ? "Optional · walk-in sale" : _customerName)</span>
+                @if (_selectedCustomerBirthday) { <span class="pos-birthday-note"><RadzenIcon Icon="cake" /> Birthday today</span> }
+            </div>
         </section>
 
         <section class="pos-catalog-panel">
@@ -242,9 +252,10 @@ else
                 {
                     @foreach (var product in _products)
                     {
-                        <button type="button" class="pos-product-tile @(product.IsOutOfStock ? "out-of-stock" : "")"
-                                disabled="@(product.IsOutOfStock || _busy)"
-                                @onclick="() => AddProduct(product)">
+                        <button type="button" class="pos-product-tile @(product.IsOutOfStock ? "out-of-stock" : "") @(product.IsOutOfStock && _canAdjustStock ? "pos-stock-adjustable" : "")"
+                                disabled="@(_busy || (product.IsOutOfStock && !_canAdjustStock))"
+                                title="@(product.IsOutOfStock && _canAdjustStock ? $"Adjust stock for {product.Name}" : product.Name)"
+                                @onclick="() => OnProductClickedAsync(product)">
                             <span class="pos-favorite-toggle @(product.IsFavorite ? "active" : string.Empty)"
                                   title="@(product.IsFavorite ? "Remove from quick buttons" : "Add to quick buttons")"
                                   @onclick:stopPropagation="true"
@@ -267,6 +278,10 @@ else
                             <span class="pos-product-stock @(product.IsOutOfStock ? "empty" : product.StockOnHand <= 5 ? "low" : "")">
                                 @product.StockOnHand.ToString("0.###") @(product.UnitAbbreviation ?? "in stock")
                             </span>
+                            @if (product.IsOutOfStock && _canAdjustStock)
+                            {
+                                <span class="pos-stock-shortcut"><RadzenIcon Icon="tune" /> Adjust stock</span>
+                            }
                         </button>
                     }
                 }
@@ -294,6 +309,7 @@ else
     private string? _activeHeldSaleNumber;
     private decimal _invoiceDiscountAmount;
     private string? _invoiceDiscountReason;
+    private Guid? _invoiceDiscountApprovalId;
     private List<CustomerLookupDto> _customers = [];
     private Guid? _selectedCustomerId;
     private CustomerLookupDto? _selectedCustomer;
@@ -306,6 +322,7 @@ else
     private bool _ready;
     private bool _loadingProducts;
     private bool _busy;
+    private bool _canAdjustStock;
     private bool _posLockMode;
     private int? _selectedCartIndex;
     private PosReceiptDto? _lastReceipt;
@@ -333,6 +350,11 @@ else
         {
             return;
         }
+
+        var signedInUser = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        _canAdjustStock = PosInventoryAccess.CanAdjustStock(signedInUser);
+        _canUseCustomerForm = CustomerContactRules.CanRead(signedInUser);
+        _canSeeBirthdays = CustomerContactRules.CanViewBirthdays(signedInUser);
 
         if (StoreContext.StoreId is null)
         {
@@ -410,12 +432,18 @@ else
         }
 
         _loadingProducts = true;
-        _products = (await PosService.GetProductsAsync(
-            _context.StoreId,
-            _categoryId,
-            _brandId,
-            string.IsNullOrWhiteSpace(_productSearch) ? null : _productSearch)).ToList();
-        _loadingProducts = false;
+        try
+        {
+            _products = (await PosService.GetProductsAsync(
+                _context.StoreId,
+                _categoryId,
+                _brandId,
+                string.IsNullOrWhiteSpace(_productSearch) ? null : _productSearch)).ToList();
+        }
+        finally
+        {
+            _loadingProducts = false;
+        }
     }
 
     private async Task SetFilter(string mode)
@@ -477,8 +505,60 @@ else
         }
     }
 
+    private async Task OnProductClickedAsync(PosProductDto product)
+    {
+        if (_busy || _context is null) return;
+        if (!product.IsOutOfStock)
+        {
+            AddProduct(product);
+            return;
+        }
+        if (!_canAdjustStock) return;
+        _busy = true;
+        var posted = false;
+        try
+        {
+            _canAdjustStock = PosInventoryAccess.CanAdjustStock((await AuthenticationStateProvider.GetAuthenticationStateAsync()).User);
+            if (!_canAdjustStock) return;
+            var saved = await DialogService.OpenAsync<PosStockAdjustmentDialog>(
+                "Stock adjustment",
+                new Dictionary<string, object?>
+                {
+                    [nameof(PosStockAdjustmentDialog.StoreId)] = _context.StoreId,
+                    [nameof(PosStockAdjustmentDialog.StoreName)] = _context.StoreName,
+                    [nameof(PosStockAdjustmentDialog.Product)] = product
+                },
+                new DialogOptions { Width = "560px", CloseDialogOnOverlayClick = false, CloseDialogOnEsc = false, ShowClose = false });
+            if (saved is true)
+            {
+                posted = true;
+                await ReloadProducts();
+                Notifications.Notify(new NotificationMessage
+                {
+                    Severity = NotificationSeverity.Success,
+                    Summary = "Stock updated",
+                    Detail = "The adjustment was recorded. POS stock has been refreshed.",
+                    Duration = 4000
+                });
+            }
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Unable to complete the POS stock adjustment shortcut for {ProductId}", product.ProductId);
+            NotifyWarn(posted ? "Stock posted" : "Adjustment unavailable", posted
+                ? "Stock was updated, but the product list could not refresh. Refresh POS before adjusting this item again."
+                : "The stock adjustment screen could not be opened. Please try again.");
+        }
+        finally
+        {
+            _busy = false;
+            await FocusSearch();
+        }
+    }
+
     private void AddProduct(PosProductDto product)
     {
+        if (_busy) return;
         if (product.IsOutOfStock)
         {
             NotifyWarn("Out of stock", $"{product.Name} is not available.");
@@ -679,6 +759,7 @@ else
     {
         _cart.Clear();
         _selectedCartIndex = null;
+        _selectedCustomerBirthday = false;
         _selectedCustomerId = null;
         _selectedCustomer = null;
         _customerName = "Walk-In Customer";
@@ -686,15 +767,22 @@ else
         _activeHeldSaleNumber = null;
         _invoiceDiscountAmount = 0m;
         _invoiceDiscountReason = null;
+        _invoiceDiscountApprovalId = null;
         UpdateCustomerDisplay();
     }
 
-    private void OnCustomerChanged(object? value)
+    private async Task OnCustomerChanged(object? value)
     {
         _selectedCustomer = _selectedCustomerId is { } id
             ? _customers.FirstOrDefault(c => c.Id == id)
             : null;
         _customerName = _selectedCustomer?.Name ?? "Walk-In Customer";
+        _selectedCustomerBirthday = false;
+        if (_selectedCustomerId is { } selectedId && _canUseCustomerForm)
+        {
+            try { var profile = await CustomerEngagement.GetProfileAsync(selectedId); if (_selectedCustomerId == selectedId) _selectedCustomerBirthday = profile?.IsBirthdayToday == true; }
+            catch (Exception ex) { Logger.LogWarning(ex, "Unable to load the customer birthday indicator"); }
+        }
         UpdateCustomerDisplay();
     }
 
@@ -843,6 +931,7 @@ else
         {
             line.DiscountAmount = discount.Amount;
             line.DiscountReason = discount.Reason;
+            line.ManagerApprovalId = discount.ManagerApprovalId;
             NormalizeLineDiscount(line);
             NormalizeInvoiceDiscount();
             UpdateCustomerDisplay();
@@ -874,6 +963,7 @@ else
         {
             _invoiceDiscountAmount = discount.Amount;
             _invoiceDiscountReason = discount.Reason;
+            _invoiceDiscountApprovalId = discount.ManagerApprovalId;
             NormalizeInvoiceDiscount();
             UpdateCustomerDisplay();
         }
@@ -894,6 +984,7 @@ else
         if (_invoiceDiscountAmount <= 0)
         {
             _invoiceDiscountReason = null;
+            _invoiceDiscountApprovalId = null;
         }
     }
 
@@ -938,22 +1029,7 @@ else
     }
 
     [JSInvokable]
-    public async Task TriggerCustomerSelect()
-    {
-        if (_keyboardModule is null)
-        {
-            return;
-        }
-
-        try
-        {
-            await _keyboardModule.InvokeVoidAsync("clickFirst", ".pos-customer-select");
-        }
-        catch
-        {
-            NotifyWarn("Customer", "Use the customer dropdown to select or search a customer.");
-        }
-    }
+    public Task TriggerCustomerSelect() => OpenCustomerFormAsync();
 
     [JSInvokable]
     public Task TriggerPaymentMenu() => PaySplit();
@@ -1103,8 +1179,8 @@ else
 
         var tendered = await DialogService.OpenAsync<PosCashDialog>(
             "Cash payment",
-            new Dictionary<string, object?> { [nameof(PosCashDialog.Total)] = CartTotal },
-            new DialogOptions { Width = "420px", CloseDialogOnOverlayClick = false });
+            CashCustomerParameters(),
+            new DialogOptions { Width = "600px", CloseDialogOnOverlayClick = false });
 
         if (tendered is decimal amount)
         {
@@ -1131,7 +1207,7 @@ else
 
         var payments = await DialogService.OpenAsync<PosSplitPaymentDialog>(
             "Split payment",
-            new Dictionary<string, object?> { [nameof(PosSplitPaymentDialog.Total)] = CartTotal },
+            SplitCustomerParameters(),
             new DialogOptions { Width = "760px", CloseDialogOnOverlayClick = false });
 
         if (payments is List<PosPaymentLineDto> lines)
@@ -1165,6 +1241,7 @@ else
             InvoiceDiscountAmount = CartInvoiceDiscount,
             DiscountReason = _invoiceDiscountReason,
             HeldSaleId = _activeHeldSaleId,
+            ManagerApprovalId = _invoiceDiscountApprovalId,
             Lines = _cart.ToList(),
             Payments = paymentLines?.ToList() ?? []
         };
@@ -1188,6 +1265,7 @@ else
         ShowReceiptOnCustomerDisplay(result.Data);
         _cart.Clear();
         _selectedCartIndex = null;
+        _selectedCustomerBirthday = false;
         _selectedCustomerId = null;
         _selectedCustomer = null;
         _customerName = "Walk-In Customer";

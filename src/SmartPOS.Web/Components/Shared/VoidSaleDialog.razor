@@ -42,13 +42,21 @@
         _saving = true;
         _error = null;
 
+        var receipt = await PosService.GetReceiptAsync(SaleId);
+        if (receipt is null)
+        {
+            _saving = false;
+            _error = "Sale could not be found or is not accessible.";
+            return;
+        }
         var approval = await DialogService.OpenAsync<ManagerApprovalDialog>(
             "Manager approval",
             new Dictionary<string, object?>
             {
+                [nameof(ManagerApprovalDialog.StoreId)] = receipt.StoreId,
                 [nameof(ManagerApprovalDialog.ApprovalType)] = ManagerApprovalType.VoidSale,
-                [nameof(ManagerApprovalDialog.Reference)] = SaleNumber,
-                [nameof(ManagerApprovalDialog.Amount)] = TotalAmount,
+                [nameof(ManagerApprovalDialog.Reference)] = receipt.SaleNumber,
+                [nameof(ManagerApprovalDialog.Amount)] = receipt.TotalAmount,
                 [nameof(ManagerApprovalDialog.DefaultReason)] = _reason,
                 [nameof(ManagerApprovalDialog.Message)] = "Voiding a completed sale requires manager approval."
             },
@@ -63,7 +71,8 @@
         var result = await PosService.VoidSaleAsync(new VoidSaleDto
         {
             SaleId = SaleId,
-            Reason = $"{_reason} | Approved by {approved.ApprovedByName}"
+            ManagerApprovalId = approved.ApprovalId,
+            Reason = _reason?.Trim() ?? string.Empty
         });
 
         _saving = false;

@@ -22,6 +22,7 @@ public sealed class PosProductDto
 
 public sealed class PosCartLineDto
 {
+    public Guid? ManagerApprovalId { get; set; }
     public Guid ProductId { get; set; }
     public Guid? VariantId { get; set; }
     public string Sku { get; set; } = string.Empty;
@@ -40,6 +41,7 @@ public sealed class PosCartLineDto
 
 public sealed class PosCheckoutDto
 {
+    public Guid? ManagerApprovalId { get; set; }
     [Required]
     public Guid StoreId { get; set; }
 
@@ -82,6 +84,7 @@ public sealed class PosPaymentLineDto
 
 public sealed class PosDiscountResultDto
 {
+    public Guid? ManagerApprovalId { get; set; }
     public decimal Amount { get; set; }
     public string? Reason { get; set; }
 }
@@ -236,6 +239,7 @@ public sealed class ProcessReturnDto
 
 public sealed class VoidSaleDto
 {
+    public Guid? ManagerApprovalId { get; set; }
     [Required]
     public Guid SaleId { get; set; }
 
@@ -258,6 +262,10 @@ public sealed class SaleForReturnDto
 
 public sealed class SaleReturnLineOptionDto
 {
+    public decimal RefundableAmount { get; set; }
+    public decimal RefundableTax { get; set; }
+    public decimal RefundedAmount { get; set; }
+    public decimal RefundedTax { get; set; }
     public Guid SaleLineId { get; set; }
     public string Sku { get; set; } = string.Empty;
     public string ProductName { get; set; } = string.Empty;
@@ -272,6 +280,8 @@ public sealed class SaleReturnLineOptionDto
 
 public sealed class SaleReturnReceiptDto
 {
+    public decimal CreditReversedAmount { get; set; }
+    public decimal SettlementAmount { get; set; }
     public Guid ReturnId { get; set; }
     public string ReturnNumber { get; set; } = string.Empty;
     public string OriginalSaleNumber { get; set; } = string.Empty;

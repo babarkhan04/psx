@@ -172,6 +172,9 @@ public sealed class ReturnReportRowDto
 
 public sealed class CurrentStockRowDto
 {
+    public Guid StoreId { get; set; }
+    public Guid ProductId { get; set; }
+    public Guid? ProductVariantId { get; set; }
     public string StoreName { get; set; } = string.Empty;
     public string Sku { get; set; } = string.Empty;
     public string ProductName { get; set; } = string.Empty;
@@ -266,6 +269,12 @@ public sealed class ShiftCashReportRowDto
 
 public sealed class ReportsPageDto
 {
+    public IReadOnlyList<SalesRegisterRowDto> SalesRegister { get; set; } = [];
+    public IReadOnlyList<PurchaseRegisterRowDto> PurchaseRegister { get; set; } = [];
+    public IReadOnlyList<StockLedgerReportRowDto> StockLedger { get; set; } = [];
+    public IReadOnlyList<SlowMovingStockRowDto> SlowMovingStock { get; set; } = [];
+    public IReadOnlyList<WeekdaySalesRowDto> WeekdaySales { get; set; } = [];
+    public IReadOnlyList<ProductSalesRowDto> ProductPerformance { get; set; } = [];
     public SalesReportSummaryDto SalesSummary { get; set; } = new();
     public IReadOnlyList<DailySalesRowDto> DailySales { get; set; } = [];
     public IReadOnlyList<StoreSalesRowDto> SalesByStore { get; set; } = [];

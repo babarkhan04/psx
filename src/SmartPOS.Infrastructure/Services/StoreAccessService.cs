@@ -28,11 +28,15 @@ public sealed class StoreAccessService(
             return [];
         }
 
+        if (!await db.Users.AsNoTracking().AnyAsync(user => user.Id == currentUser.UserId && user.TenantId == tenantId && user.IsActive, ct) ||
+            !await db.Tenants.AsNoTracking().AnyAsync(tenant => tenant.Id == tenantId && tenant.IsActive, ct))
+            return [];
+
         if (HasAllStoreAccess())
         {
             return await db.Stores.AsNoTracking()
                 .IgnoreQueryFilters()
-                .Where(s => s.TenantId == tenantId && s.IsActive)
+                .Where(s => s.TenantId == tenantId && s.IsActive && !s.IsDeleted)
                 .OrderBy(s => s.Code)
                 .Select(s => s.Id)
                 .ToListAsync(ct);
@@ -45,7 +49,7 @@ public sealed class StoreAccessService(
 
         return await db.UserStores.AsNoTracking()
             .IgnoreQueryFilters()
-            .Where(us => us.TenantId == tenantId && us.UserId == currentUser.UserId && us.Store != null && us.Store.IsActive)
+            .Where(us => us.TenantId == tenantId && !us.IsDeleted && us.UserId == currentUser.UserId && us.Store != null && us.Store.IsActive && !us.Store.IsDeleted)
             .OrderByDescending(us => us.IsDefault)
             .ThenBy(us => us.Store!.Code)
             .Select(us => us.StoreId)
@@ -60,11 +64,15 @@ public sealed class StoreAccessService(
             return null;
         }
 
+        if (!await db.Users.AsNoTracking().AnyAsync(user => user.Id == currentUser.UserId && user.TenantId == tenantId && user.IsActive, ct) ||
+            !await db.Tenants.AsNoTracking().AnyAsync(tenant => tenant.Id == tenantId && tenant.IsActive, ct))
+            return null;
+
         if (HasAllStoreAccess())
         {
             return await db.Stores.AsNoTracking()
                 .IgnoreQueryFilters()
-                .Where(s => s.TenantId == tenantId && s.IsActive)
+                .Where(s => s.TenantId == tenantId && s.IsActive && !s.IsDeleted)
                 .OrderBy(s => s.Code)
                 .Select(s => (Guid?)s.Id)
                 .FirstOrDefaultAsync(ct);
@@ -77,7 +85,7 @@ public sealed class StoreAccessService(
 
         return await db.UserStores.AsNoTracking()
             .IgnoreQueryFilters()
-            .Where(us => us.TenantId == tenantId && us.UserId == currentUser.UserId && us.Store != null && us.Store.IsActive)
+            .Where(us => us.TenantId == tenantId && !us.IsDeleted && us.UserId == currentUser.UserId && us.Store != null && us.Store.IsActive && !us.Store.IsDeleted)
             .OrderByDescending(us => us.IsDefault)
             .ThenBy(us => us.Store!.Code)
             .Select(us => (Guid?)us.StoreId)
